@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profile record",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "rules": {
+        "read": "request.auth != null && request.auth.uid == resource.data.uid",
+        "write": "request.auth != null && request.auth.uid == resource.data.uid"
+      }
+    },
+    "chatThreads": {
+      "title": "ChatThread",
+      "description": "Interactive chat conversations and generated websites",
+      "properties": {
+        "userId": { "type": "string" },
+        "topic": { "type": "string" },
+        "title": { "type": "string" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "rules": {
+        "read": "request.auth != null",
+        "write": "request.auth != null"
+      }
+    },
+    "projectMemories": {
+      "title": "ProjectMemory",
+      "description": "Saved project blueprints, code snippets, and architectural context",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "summary": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "rules": {
+        "read": "request.auth != null",
+        "write": "request.auth != null"
+      }
+    },
+    "bookings": {
+      "title": "Booking",
+      "description": "Client consultation and project booking requests",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "service": { "type": "string" },
+        "date": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "rules": {
+        "read": "request.auth != null",
+        "write": "true"
+      }
+    }
+  }
+}

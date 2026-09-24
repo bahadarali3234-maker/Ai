@@ -1,0 +1,6 @@
+{
+  "name": "Gemini — AI Workspace & Creative Intelligence",
+  "description": "Next-generation AI Workspace showcasing multimodal reasoning, AI Projects, generative capabilities, and intelligent creative sessions.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
