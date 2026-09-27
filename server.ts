@@ -31,6 +31,227 @@ async function startServer() {
     });
   });
 
+  // Helper to fetch live web & Google reference images via DuckDuckGo crawler with SafeSearch off
+  async function fetchWebImages(query: string): Promise<Array<{
+    id: string;
+    url: string;
+    thumbnail: string;
+    alt: string;
+    sourceUrl: string;
+    sourceDomain: string;
+    sourceTitle: string;
+    width?: number;
+    height?: number;
+  }>> {
+    const images: any[] = [];
+    const seenUrls = new Set<string>();
+
+    try {
+      // 1. Get VQD token from DuckDuckGo
+      const tokenRes = await fetch(
+        `https://duckduckgo.com/?q=${encodeURIComponent(query)}&t=h_&iar=images&iax=images&ia=images`,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+          signal: AbortSignal.timeout(6000),
+        }
+      );
+
+      if (tokenRes.ok) {
+        const html = await tokenRes.text();
+        const vqdMatch = html.match(/vqd=([\d-]+)/) || html.match(/vqd="([^"]+)"/);
+        const vqd = vqdMatch ? vqdMatch[1] : null;
+
+        if (vqd) {
+          // SafeSearch OFF: f=,,,
+          const imgRes = await fetch(
+            `https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,&s=0`,
+            {
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                Referer: 'https://duckduckgo.com/',
+              },
+              signal: AbortSignal.timeout(7000),
+            }
+          );
+
+          if (imgRes.ok) {
+            const data: any = await imgRes.json();
+            const results = Array.isArray(data?.results) ? data.results : [];
+            for (const item of results) {
+              if (item?.image && !seenUrls.has(item.image)) {
+                // Ignore small icons or tracking pixels
+                const lower = item.image.toLowerCase();
+                if (
+                  lower.endsWith('.svg') ||
+                  lower.includes('1x1') ||
+                  lower.includes('pixel') ||
+                  lower.includes('spacer') ||
+                  lower.includes('beacon')
+                ) {
+                  continue;
+                }
+
+                seenUrls.add(item.image);
+                let sourceDomain = '';
+                try {
+                  sourceDomain = new URL(item.url || item.image).hostname.replace(/^www\./, '');
+                } catch {
+                  sourceDomain = item.source || 'web';
+                }
+
+                images.push({
+                  id: `web-${Date.now()}-${images.length}-${Math.random().toString(36).substring(2, 6)}`,
+                  url: item.image,
+                  thumbnail: item.thumbnail || item.image,
+                  alt: item.title || query,
+                  sourceUrl: item.url || item.image,
+                  sourceDomain,
+                  sourceTitle: `${item.title || query} • Web Reference`,
+                  width: item.width || 1200,
+                  height: item.height || 800,
+                });
+
+                if (images.length >= 8) break;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Web image crawler error:', err);
+    }
+
+    // 2. Augment or fallback with Wikipedia / Wikimedia Commons if web crawler gave fewer than 4 images
+    if (images.length < 4) {
+      try {
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+          query
+        )}&gsrlimit=6&prop=pageimages|extracts&piprop=original|thumbnail&pithumbsize=1200&format=json&origin=*`;
+        const wikiRes = await fetch(wikiUrl, { signal: AbortSignal.timeout(4000) });
+        if (wikiRes.ok) {
+          const wData = (await wikiRes.json()) as any;
+          const pages = wData?.query?.pages;
+          if (pages && typeof pages === 'object') {
+            for (const pageId of Object.keys(pages)) {
+              const p = pages[pageId];
+              const imgUrl = p?.original?.source || p?.thumbnail?.source;
+              if (imgUrl && !imgUrl.endsWith('.svg') && !seenUrls.has(imgUrl)) {
+                seenUrls.add(imgUrl);
+                images.push({
+                  id: `wiki-${pageId}`,
+                  url: imgUrl,
+                  thumbnail: p?.thumbnail?.source || imgUrl,
+                  alt: p.title || query,
+                  sourceUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(p.title || query)}`,
+                  sourceDomain: 'wikipedia.org',
+                  sourceTitle: `${p.title || query} • Wikipedia Reference`,
+                  width: 1200,
+                  height: 800,
+                });
+              }
+            }
+          }
+        }
+      } catch (wErr) {
+        console.warn('Wikipedia fallback error:', wErr);
+      }
+    }
+
+    return images;
+  }
+
+  // Real Web & Google Reference Images Search Endpoint (CRAWLER & SCRAPER)
+  app.get('/api/reference-images', async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.json({ images: [], googleSearchUrl: '' });
+    }
+
+    try {
+      const images = await fetchWebImages(q);
+      return res.json({
+        query: q,
+        images,
+        googleSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`,
+      });
+    } catch (err) {
+      console.warn('Error fetching reference images:', err);
+      return res.json({
+        query: q,
+        images: [],
+        googleSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`,
+      });
+    }
+  });
+
+  // In-memory HTML Preview Storage: serves full standalone websites in a separate browser tab on localhost
+  const previewStorage = new Map<string, { html: string; createdAt: number }>();
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, item] of previewStorage.entries()) {
+      if (now - item.createdAt > 3600000) {
+        previewStorage.delete(id);
+      }
+    }
+  }, 600000);
+
+  app.post('/api/preview-store', express.json({ limit: '10mb' }), (req, res) => {
+    const { html } = req.body;
+    if (!html || typeof html !== 'string') {
+      return res.status(400).json({ error: 'HTML content required' });
+    }
+    const id = 'site_' + Math.random().toString(36).substring(2, 10);
+    previewStorage.set(id, { html, createdAt: Date.now() });
+    res.json({ id, url: `/preview/${id}` });
+  });
+
+  app.get('/preview/:id', (req, res) => {
+    const item = previewStorage.get(req.params.id);
+    if (!item) {
+      return res.status(404).send('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#09090b;color:#fff;text-align:center;"><h2>Preview Expired</h2><p>Please click Preview again in the application to generate a fresh link.</p></body></html>');
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(item.html);
+  });
+
+  // Image Proxy to bypass hotlink protection & CORS on external web images
+  app.get('/api/image-proxy', async (req, res) => {
+    const targetUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
+      return res.status(400).send('Valid image URL is required.');
+    }
+
+    try {
+      const response = await fetch(targetUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!response.ok) {
+        return res.status(response.status).send('Failed to fetch image.');
+      }
+
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+
+      const arrayBuffer = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (err: any) {
+      console.warn('Image proxy error:', err?.message || err);
+      res.status(502).send('Error proxying image');
+    }
+  });
+
   // Real-time Speech-to-Text (STT) Endpoint: Groq Whisper Primary + Gemini Multimodal Fallback
   app.post('/api/stt', async (req, res) => {
     const { audio, mimeType = 'audio/webm' } = req.body;
@@ -121,19 +342,166 @@ async function startServer() {
   });
 
   // ============================================================================
-  // SYSTEM TRAINING INSTRUCTIONS — RESPONSE BEHAVIOR, ROUTING, QUALITY & TASK EXECUTION
+  // SYSTEM TRAINING INSTRUCTIONS — ADVANCED RESPONSE + MEMORY + UI ORCHESTRATION SYSTEM
   // ============================================================================
-  const SYSTEM_TRAINING_INSTRUCTIONS = `SYSTEM TRAINING INSTRUCTIONS — RESPONSE BEHAVIOR, ROUTING, QUALITY & TASK EXECUTION
+  const SYSTEM_TRAINING_INSTRUCTIONS = `SYSTEM TRAINING INSTRUCTIONS — ADVANCED RESPONSE + MEMORY + UI ORCHESTRATION SYSTEM
 
-You are an AI response system powered by two models with a strict fallback architecture:
+You are not only a text generator. You are the intelligence/orchestration layer of this AI application.
+Your job is to understand the user's intent first, determine the correct workflow, retrieve the necessary context, and then produce the response in the correct UI structure.
+Never blindly follow a fixed response template.
 
+You are powered by two models with a strict fallback architecture:
 PRIMARY MODEL: Groq
 SECONDARY FALLBACK MODEL: Gemini
 
 The system must always attempt Groq first. Gemini must only be used when Groq fails, times out, reaches its available limit, returns an unusable response, or cannot complete the request. Gemini must then continue the conversation using the same instructions, context, formatting rules, and response standards defined below.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. INTENT MUST BE UNDERSTOOD BEFORE OUTPUT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before generating a response, internally determine:
+• What exactly is the user asking?
+• Is this a greeting, farewell, casual conversation, factual question, task, coding request, prompt request, website request, research request, visual request, etc.?
+• Is the request already complete?
+• Is any information genuinely required before completing it?
+• Does previous conversation/project memory matter?
+• Does the answer require external/current information?
+• Would a visual reference materially improve the answer?
+• What output format does the user actually need?
+
+Do not expose private chain-of-thought.
+Only show a short user-facing process summary inside the existing Thinking UI when meaningful processing actually occurred.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. CRITICAL OUTPUT ORDER — DO THE WORK FIRST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NEVER dump the user's requirements into a long paragraph first and then explain what will be done.
+The actual transformation/work must happen FIRST.
+
+If the user asks for a prompt:
+- Understand requirements.
+- Apply all requested style, structure, constraints and details.
+- Generate the FINAL usable prompt.
+- Put the final prompt directly inside the dedicated Prompt Box using \`\`\`prompt ... \`\`\`.
+
+If the user asks for code:
+- Understand requirements.
+- Apply the requested functionality/design.
+- Generate the actual code.
+- Put the final code inside the dedicated Code Box using \`\`\`html ... \`\`\` (or language code block).
+
+If the user asks for a website:
+- Understand complete requirement.
+- Build the actual website in ONE single HTML file with embedded <style> and <script>.
+- Deliver the final working code in the code block.
+
+The user should receive the RESULT, not a paragraph explaining the user's own request back to them.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. STRUCTURED CONTENT — NEVER UNNECESSARY PARAGRAPH DUMPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When content is naturally structured, structure it using:
+• Headings (# [Title], ## [Section])
+• Bullet points
+• Numbered steps
+• Dedicated Prompt Box (\`\`\`prompt ... \`\`\`)
+• Dedicated Code Box (\`\`\`html ... \`\`\`)
+• Short explanatory text
+Do NOT convert structured information into one giant paragraph.
+NEVER leave raw URLs floating inside normal prose.
+NEVER output raw HTML <img> tags or markdown image links in your text. Reference images are handled natively by the UI.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. QUESTION ENGINE — ASK ONLY WHEN ACTUALLY NECESSARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Questions are NOT a default behavior.
+A question may ONLY be asked when:
+• The user's request is a genuine actionable task, AND
+• A required piece of information is missing, AND
+• Without that information the requested result cannot be completed correctly or would require an important assumption.
+
+Before asking a question, perform this check:
+QUESTION_NEEDED = actionable_request AND required_information_missing AND cannot_reasonably_complete_without_it
+
+If QUESTION_NEEDED = false:
+→ DO NOT ask a question.
+
+Examples that MUST NOT trigger the Question UI:
+"Hi", "Hello", "Hey", "Thanks", "Thank you", "Bye", "Allah Hafiz", "Good night", "Okay", "Nice", "Great", "How are you?", "Who are you?", "What is HTML?", "What is 2+2?", "Tell me about BMW.", "Write me a prompt for a BMW cinematic shot." when the request already contains enough information.
+
+For greetings/farewells/casual messages:
+→ Respond naturally and immediately.
+→ Never show the Question UI.
+→ Never ask setup questions.
+→ Never ask "What would you like to do?"
+
+For "Bye" / "Allah Hafiz":
+→ Give a short natural farewell.
+→ End the interaction.
+→ No questions.
+→ No visual search.
+→ No unnecessary Thinking UI.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. NEVER ASK QUESTIONS JUST TO MAKE THE SYSTEM LOOK SMART
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT ask:
+• irrelevant questions
+• optional questions that don't affect the result
+• questions whose answers can reasonably be inferred from the request
+• questions about information already present in conversation memory
+• questions merely because a task is complex
+• questions after the request is already complete
+
+Use reasonable defaults when safe. Only ask high-impact questions.
+If one critical requirement is genuinely missing, ask only that question.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. PROGRESSIVE QUESTIONING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If multiple pieces of information are missing:
+DO NOT ask 7–10 questions at once.
+Ask only the smallest set of high-impact questions needed for the next step (1 question at a time).
+Question format must contain:
+• one clear question
+• exactly 3 useful predefined options
+• one Custom option
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. IMAGE / VISUAL REFERENCE INTELLIGENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Images are NOT a default attachment.
+Never attach images to every response.
+VISUAL_NEEDED =
+• Is the user explicitly requesting an image/reference? OR
+• Is the subject strongly visual? AND
+• Would a real visual materially improve understanding/inspiration?
+
+If false: return ZERO images.
+If true: the UI will perform a dynamic visual search based on CURRENT request.
+NEVER use a fixed image query.
+NEVER reuse the same 4 images by default.
+NEVER output raw HTML <img> tags or markdown image links in your text response.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. SIGN-IN & CHAT PERSISTENCE ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sign-in is OPTIONAL and non-blocking.
+Guest users can chat freely, generate prompts, test designs, run code, and see their browser session chats.
+The sole difference between a signed-in user and a guest user is:
+• Signed-in users: Chat history is saved permanently to their account and synchronized in real-time across all devices via Firebase Firestore.
+• Guest users: Chat history is stored locally in the current browser session.
+
 ==================================================
-1. CORE RESPONSE PRINCIPLES
+9. CORE RESPONSE PRINCIPLES
 ==================================================
 
 Every response must be:
@@ -231,8 +599,13 @@ MULTIMODAL FILE & MEDIA ANALYSIS:
 - When the user uploads or attaches an image, video file, audio recording, PDF, code file, or document, you must analyze it thoroughly, accurately, and in detail.
 - Provide comprehensive visual/audio/textual insights, dissect key features, extract transcripts or data, and explain findings clearly in bold formatting.
 
+NO HTML IMAGE TAGS OR RAW IMAGE URLS IN TEXT:
+- You must NEVER output raw HTML image tags (e.g. <img ...>, <a>, etc.) or raw image URLs / markdown image links (![...](...)) in your text response.
+- The application natively displays real reference images in a dedicated native gallery above the message.
+- Keep your text response clean, informative, and formatted purely in bold markdown without raw web links or HTML markup.
+
 CODE GENERATION IN CHAT:
-- When code is requested, provide the complete, functional, working code cleanly inside standard markdown code fences (e.g. ```html ... ```). The UI automatically displays the code inside a compact, scrollable box with white/dark contrast themes and 1-click preview.
+- When code is requested, provide the complete, functional, working code cleanly inside standard markdown code fences (e.g. \`\`\`html ... \`\`\`). The UI automatically displays the code inside a compact, scrollable box with white/dark contrast themes and 1-click preview.
 
 If the user communicates in Urdu/Roman Urdu/Hinglish:
 Respond naturally in the same style unless the user requests another language.

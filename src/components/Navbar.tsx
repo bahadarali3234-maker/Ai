@@ -92,35 +92,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenChat, onNavigate, onOpenLo
 
         {/* Right Action & Mobile Toggle */}
         <div className="flex items-center gap-3">
-          {/* Optional Sign In / Profile Button */}
-          {currentUser && !currentUser.isAnonymous ? (
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/10 border border-white/15 text-xs text-zinc-200">
-              <div className="w-5 h-5 rounded-full bg-[#f41151] flex items-center justify-center text-[10px] font-bold text-white uppercase">
-                {currentUser.displayName?.[0] || currentUser.email?.[0] || 'U'}
-              </div>
-              <span className="max-w-[100px] truncate font-medium">
-                {currentUser.displayName || currentUser.email?.split('@')[0]}
-              </span>
-              <button
-                type="button"
-                onClick={() => logOut()}
-                title="Log out"
-                className="hover:text-red-400 p-0.5 rounded cursor-pointer"
-              >
-                <LogOut size={13} />
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-zinc-200 text-xs font-semibold tracking-wide transition-all cursor-pointer"
-            >
-              <User size={13} className="text-[#f41151]" />
-              <span>Sign In</span>
-            </button>
-          )}
-
           {/* iOS Style Ask AI Button */}
           <motion.button
             id="nav-chat-btn"

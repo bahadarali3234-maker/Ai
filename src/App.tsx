@@ -11,7 +11,6 @@ import { ServicesSection } from './components/ServicesSection';
 import { AboutSection } from './components/AboutSection';
 import { FaqSection } from './components/FaqSection';
 import { Footer } from './components/Footer';
-import { FloatingActionWidget } from './components/FloatingActionWidget';
 import { ProjectModal } from './components/ProjectModal';
 import { IosChatModal } from './components/IosChatModal';
 import { BookingModal } from './components/BookingModal';
@@ -93,11 +92,6 @@ export default function App() {
       {/* Footer with Chat Link */}
       <Footer
         onNavigate={handleNavigate}
-        onOpenChat={() => handleOpenChat()}
-      />
-
-      {/* Floating Dynamic Island Style Chat Widget */}
-      <FloatingActionWidget
         onOpenChat={() => handleOpenChat()}
       />
 

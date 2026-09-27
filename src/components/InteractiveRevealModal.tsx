@@ -16,6 +16,7 @@ import {
   User as UserIcon,
   X,
   Paperclip,
+  LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HERO_AVATAR } from '../data/portfolioData';
@@ -23,6 +24,7 @@ import defaultVisibleImg from '../assets/images/back_reveal.png';
 import revealedUnderneathImg from '../assets/images/front_overlay.jpg';
 import { FullScreenChatView, SttSoundBar } from './FullScreenChatView';
 import { AttachedFile } from '../types';
+import { subscribeToAuth, getCurrentUser, logOut } from '../firebase';
 
 interface Message {
   id: string;
@@ -35,12 +37,15 @@ interface InteractiveRevealModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenBooking?: () => void;
+  onOpenLogin?: () => void;
   initialTopic?: string;
 }
 
 export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
   isOpen,
   onClose,
+  onOpenBooking,
+  onOpenLogin,
   initialTopic = '',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,6 +64,12 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
   const [isFullScreenChatOpen, setIsFullScreenChatOpen] = useState(false);
   const [currentFullScreenPrompt, setCurrentFullScreenPrompt] = useState('');
   const [currentFullScreenAttachments, setCurrentFullScreenAttachments] = useState<AttachedFile[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(() => getCurrentUser());
+
+  useEffect(() => {
+    const unsub = subscribeToAuth((user) => setCurrentUser(user));
+    return () => unsub();
+  }, []);
 
   // Working File Attachments (Matches exact screenshot styling, Max 10 files)
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
@@ -99,15 +110,27 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
 
     filesToAttach.forEach((file) => {
       const isImg = file.type.startsWith('image/');
-      const newAttachment: AttachedFile = {
-        id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        isImage: isImg,
-        preview: isImg ? URL.createObjectURL(file) : undefined,
+      const reader = new FileReader();
+      const attachmentId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        const newAttachment: AttachedFile = {
+          id: attachmentId,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          isImage: isImg,
+          preview: dataUrl,
+        };
+        setAttachments((prev) => [...prev, newAttachment]);
       };
-      setAttachments((prev) => [...prev, newAttachment]);
+
+      if (file.type.includes('text') || /\.(txt|md|json|js|jsx|ts|tsx|html|css|py|csv)$/i.test(file.name)) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsDataURL(file);
+      }
     });
   };
 
@@ -509,28 +532,28 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
           </button>
         </div>
 
-        {/* UPPER SECTION: Exact Hero Section Typography (THINK CREATIVE with Overlapping 3D Avatar) + Prompt Box */}
-        <div className="absolute top-2 sm:top-4 md:top-6 left-0 right-0 z-30 px-4 flex flex-col items-center pointer-events-none">
-          {/* Typography & Overlapping 3D Avatar (Exact HeroSection Style) */}
-          <div className="relative flex flex-col items-center justify-center select-none text-center mb-3 sm:mb-4">
+        {/* UPPER/MIDDLE SECTION: THINK CREATIVE directly above the Prompt Box */}
+        <div className="absolute top-[23vh] xs:top-[25vh] sm:top-[11vh] md:top-[13vh] left-0 right-0 z-30 px-3 sm:px-4 flex flex-col items-center pointer-events-none transition-all duration-300">
+          {/* Typography & Overlapping 3D Avatar: Directly above the prompt box */}
+          <div className="relative flex flex-col items-center justify-center select-none text-center mb-2 sm:mb-3 pointer-events-auto">
             {/* First word: THINK (White uppercase) */}
             <motion.h1
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-              className="text-4xl xs:text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-white uppercase drop-shadow-[0_10px_30px_rgba(0,0,0,0.9)]"
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              className="text-3xl xs:text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-white uppercase drop-shadow-[0_10px_30px_rgba(0,0,0,0.9)]"
               style={{ fontFamily: "'Syne', sans-serif" }}
             >
               THINK
             </motion.h1>
 
             {/* Second row: CREATIVE with overlapping 3D Character Avatar */}
-            <div className="relative w-full flex items-center justify-center -mt-1.5 xs:-mt-2 sm:-mt-3 md:-mt-4">
+            <div className="relative w-full flex items-center justify-center -mt-1 xs:-mt-2 sm:-mt-3 md:-mt-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.7, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
-                className="text-4xl xs:text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-[#f41151] uppercase flex items-center justify-center w-full drop-shadow-[0_15px_35px_rgba(244,17,81,0.4)]"
+                transition={{ duration: 0.6, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
+                className="text-3xl xs:text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-[#f41151] uppercase flex items-center justify-center w-full drop-shadow-[0_15px_35px_rgba(244,17,81,0.4)]"
                 style={{ fontFamily: "'Syne', sans-serif" }}
               >
                 CREATIVE
@@ -538,13 +561,13 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
 
               {/* 3D Cutout Avatar - Floating right over the center of typography exactly like HeroSection */}
               <motion.div
-                initial={{ opacity: 0, scale: 0.85, y: 15 }}
+                initial={{ opacity: 0, scale: 0.85, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                transition={{ duration: 0.7, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
                 className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[48%] z-20 pointer-events-auto"
               >
                 <motion.div
-                  animate={{ y: [0, -5, 0] }}
+                  animate={{ y: [0, -4, 0] }}
                   transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut" }}
                   className="relative group cursor-pointer select-none"
                 >
@@ -554,7 +577,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                   <img
                     src={HERO_AVATAR}
                     alt="Irtza 3D Cutout Character Avatar"
-                    className="w-20 xs:w-24 sm:w-32 md:w-40 lg:w-48 max-w-none h-auto object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.95)] drop-shadow-[0_0_30px_rgba(244,17,81,0.4)] transform group-hover:scale-105 transition-transform duration-500 pointer-events-none"
+                    className="w-14 xs:w-18 sm:w-32 md:w-40 lg:w-48 max-w-none h-auto object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.95)] drop-shadow-[0_0_30px_rgba(244,17,81,0.4)] transform group-hover:scale-105 transition-transform duration-500 pointer-events-none"
                     referrerPolicy="no-referrer"
                   />
                 </motion.div>
@@ -562,8 +585,8 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
             </div>
           </div>
 
-          {/* THE PROMPT BOX (Matches User's Provided Image Exactly, Placed directly above BMW) */}
-          <div className="w-full max-w-[560px] pointer-events-auto">
+          {/* THE PROMPT BOX (Matches User's Provided Image Exactly, Placed directly under THINK CREATIVE) */}
+          <div className="w-full max-w-[94vw] sm:max-w-[560px] pointer-events-auto">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -841,7 +864,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
               >
                 <div className="rounded-2xl bg-black/85 backdrop-blur-2xl border border-red-500/30 p-4 shadow-[0_15px_40px_rgba(0,0,0,0.85)] text-white text-xs sm:text-sm space-y-2">
                   <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono pb-1 border-b border-white/10">
-                    <span className="text-[#f41151] font-semibold">Gemini 3.0 Blueprint</span>
+                    <span className="text-[#f41151] font-semibold">AI Intelligence Blueprint</span>
                     <button
                       onClick={() => setShowResponsePopup(false)}
                       className="hover:text-white p-0.5 rounded cursor-pointer"
@@ -1001,19 +1024,74 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                       <span>Back to Dashboard</span>
                     </button>
 
-                    {/* User Profile Row: Red Glowing User Avatar + Free Plan */}
-                    <div className="flex items-center justify-between px-2 pt-1 select-none">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#120205] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_14px_rgba(255,24,40,0.8),inset_0_0_8px_rgba(255,24,40,0.4)]">
-                          <UserIcon size={19} className="fill-[#ff1828] text-[#ff1828]" />
+                    {/* Menu Account Actions: Sign In (Guest) or Sign Out (Logged In) */}
+                    {currentUser && !currentUser.isAnonymous ? (
+                      <div className="flex items-center justify-between px-2.5 py-2 select-none rounded-xl bg-white/[0.04] border border-white/10">
+                        <div className="flex items-center gap-2.5 min-w-0 truncate">
+                          <div className="w-9 h-9 rounded-full bg-[#120205] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_12px_rgba(255,24,40,0.6)] shrink-0 overflow-hidden">
+                            {currentUser?.photoURL ? (
+                              <img src={currentUser.photoURL} alt="Profile" className="w-full h-full object-cover" />
+                            ) : (
+                              <UserIcon size={17} className="fill-[#ff1828] text-[#ff1828]" />
+                            )}
+                          </div>
+                          <div className="flex flex-col truncate">
+                            <span className="text-[13px] font-semibold text-white leading-tight truncate">
+                              {currentUser.displayName || currentUser.email?.split('@')[0]}
+                            </span>
+                            <span className="text-[11px] text-zinc-400 truncate">
+                              {currentUser.email || 'Cloud Account'}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="text-[14px] font-semibold text-white leading-tight">User</span>
-                          <span className="text-xs text-zinc-400">Free Plan</span>
-                        </div>
+
+                        {/* Sign Out Button in Menu */}
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await logOut();
+                          }}
+                          className="ml-2 px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                          title="Sign Out"
+                        >
+                          <LogOut size={13} />
+                          <span>Sign Out</span>
+                        </button>
                       </div>
-                      <ChevronDown size={16} className="text-[#ff1828]" />
-                    </div>
+                    ) : (
+                      <div
+                        onClick={onOpenLogin}
+                        className="flex items-center justify-between px-3 py-2 select-none cursor-pointer hover:bg-white/5 bg-white/[0.03] border border-white/10 rounded-xl transition-colors"
+                        title="Click to sign in"
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className="w-9 h-9 rounded-full bg-[#120205] border-[1.5px] border-zinc-700 flex items-center justify-center text-zinc-400 shrink-0">
+                            <UserIcon size={16} />
+                          </div>
+                          <div className="flex flex-col truncate">
+                            <span className="text-[13px] font-semibold text-white leading-tight truncate">
+                              Guest User
+                            </span>
+                            <span className="text-[11px] text-zinc-400 truncate">
+                              Session Active
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Sign In Button in Menu */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenLogin?.();
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(255,24,40,0.4)] cursor-pointer shrink-0"
+                        >
+                          Sign In
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               </motion.div>
@@ -1029,6 +1107,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
           initialAttachments={currentFullScreenAttachments}
           selectedRecentTopic={activeRecentItem}
           onSelectRecentTopic={(topic) => setActiveRecentItem(topic)}
+          onOpenLogin={onOpenLogin}
         />
       </motion.div>
     </AnimatePresence>

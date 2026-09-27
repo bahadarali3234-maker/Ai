@@ -234,6 +234,182 @@ export const SEED_PROJECTS: ProjectMemory[] = [
       },
     ],
   },
+  {
+    id: 'proj-think-creative',
+    name: 'Think Creative — AI Workspace (Master Design Reference)',
+    description: 'Clean, neumorphic AI workspace for ideas, websites, writing and creative workflows with soft tactile surfaces, subtle noise texture, and vibrant crimson accents.',
+    threadId: 'master-design-reference',
+    createdAt: '2026-09-27T00:00:00.000Z',
+    updatedAt: '2026-09-27T02:00:00.000Z',
+    decisions: [
+      'Visual Philosophy: Master Design DNA — Clean soft neumorphic aesthetic (--bg:#f3f5f8, --surface:#f7f8fa, --accent:#ff1450, --shadow1, --shadow2, --inset)',
+      'Design DNA: Soft inset cards, floating blur navigation, pill badges, layered surfaces, micro-interactions, mobile drawer dialog',
+      'Adaptability Rule: Preserve design quality and DNA, adapt to user request, never copy literally unless requested',
+      'Architecture: Complete single-file HTML + embedded CSS + vanilla JS',
+    ],
+    tags: ['think-creative', 'master-reference', 'neumorphic', 'ai-workspace', 'html', 'design-dna', 'landing-page'],
+    summary: 'The application Master Website Design Reference representing the design language and quality bar: soft neumorphism, tactile shadows, subtle SVG noise, crimson glow, interactive prompt typewriter, and mobile drawer.',
+    references: [],
+    artifacts: [
+      {
+        id: 'art-think-creative-master',
+        projectId: 'proj-think-creative',
+        name: 'think-creative-master.html',
+        title: 'Think Creative — Master Design Reference',
+        type: 'html',
+        version: 1,
+        createdAt: '2026-09-27T00:00:00.000Z',
+        updatedAt: '2026-09-27T02:00:00.000Z',
+        tags: ['master-reference', 'html', 'neumorphic', 'think-creative', 'design-dna'],
+        description: 'Complete versioned source of the Master Design Reference containing complete HTML, typography, CSS tokens, neumorphic shadows, responsive layout, and vanilla JS interactions.',
+        userDecisions: [
+          'Preserved complete master source artifact with design tokens',
+          'Established Design DNA extraction baseline for all generated web applications',
+        ],
+        content: `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Think Creative — AI Workspace</title>
+<meta name="description" content="Think Creative is a clean, neumorphic AI workspace for ideas, websites, writing and creative workflows." />
+<meta name="theme-color" content="#f3f5f8" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f5f8; --surface:#f7f8fa; --text:#14171c; --muted:#737983;
+  --accent:#ff1450; --accent2:#ff4f78; --line:rgba(20,23,28,.08);
+  --shadow1: 16px 16px 35px rgba(163,170,181,.32);
+  --shadow2: -12px -12px 30px rgba(255,255,255,.95);
+  --inset: inset 7px 7px 15px rgba(173,181,193,.25), inset -7px -7px 15px rgba(255,255,255,.9);
+  --radius:22px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:90px}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden;-webkit-font-smoothing:antialiased;line-height:1.5}
+img{max-width:100%;display:block}
+a{text-decoration:none;color:inherit}
+button,input,textarea{font:inherit}
+button{ -webkit-tap-highlight-color: transparent; }
+.page{min-height:100vh;position:relative}
+.noise{position:fixed;inset:0;pointer-events:none;opacity:.025;z-index:20;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.4'/%3E%3C/svg%3E")}
+.nav{position:fixed;top:18px;left:50%;transform:translateX(-50%);width:min(1160px,calc(100% - 28px));height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 20px;border:1px solid rgba(255,255,255,.85);background:rgba(247,248,250,.76);backdrop-filter:blur(20px) saturate(1.2);-webkit-backdrop-filter:blur(20px) saturate(1.2);border-radius:22px;box-shadow:var(--shadow1),var(--shadow2);z-index:15;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:-.04em;flex-shrink:0}
+.brand-dot{width:32px;height:32px;border-radius:11px;background:linear-gradient(145deg,#ff5a84,#ff0e49);box-shadow:inset 3px 3px 6px rgba(255,255,255,.35),5px 5px 12px rgba(255,20,80,.25);position:relative;flex-shrink:0}
+.brand-dot:after{content:"";position:absolute;width:9px;height:9px;border-radius:50%;background:white;left:12px;top:8px;box-shadow:0 0 12px white}
+.navlinks{display:flex;gap:26px;color:#646a73;font-size:14px;font-weight:700;align-items:center}
+.navlinks a{padding:6px 2px;transition:.2s}
+.navlinks a:hover{color:var(--text)}
+.nav-actions{display:flex;gap:8px;align-items:center;flex-shrink:0}
+.hamburger{display:none;width:42px;height:42px;border-radius:12px;border:0;background:var(--surface);box-shadow:5px 5px 11px rgba(160,168,180,.25),-5px -5px 11px white;cursor:pointer;font-size:20px;color:#636973;align-items:center;justify-content:center}
+.btn{border:0;cursor:pointer;border-radius:15px;padding:12px 17px;font-weight:800;transition:.25s ease;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;white-space:nowrap;user-select:none}
+.btn-soft{background:var(--surface);box-shadow:7px 7px 16px rgba(170,178,190,.27),-6px -6px 14px white;color:#2b3038}
+.btn-soft:hover{transform:translateY(-2px)}
+.btn-primary{color:white;background:linear-gradient(135deg,#ff174f,#ff416f);box-shadow:7px 9px 20px rgba(255,20,80,.25),inset 2px 2px 5px rgba(255,255,255,.22)}
+.btn-primary:hover{transform:translateY(-2px) scale(1.01);box-shadow:10px 13px 26px rgba(255,20,80,.3)}
+.hero{position:relative;min-height:920px;padding:145px 20px 70px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.hero-orb{position:absolute;width:620px;height:620px;max-width:90vw;max-height:90vw;border-radius:50%;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.95),rgba(238,241,246,.35) 58%,rgba(243,245,248,0) 70%);filter:blur(2px);pointer-events:none;top:10%;left:50%;transform:translateX(-50%)}
+.hero-content{width:min(1180px,100%);position:relative;text-align:center;z-index:1}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:999px;color:#676d76;font-size:12px;font-weight:800;background:var(--surface);box-shadow:var(--inset),5px 5px 12px rgba(170,178,190,.15);animation:float 4s ease-in-out infinite}
+.eyebrow i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px rgba(255,20,80,.7)}
+.title-wrap{position:relative;margin:28px auto 0;max-width:1050px;padding:20px 0 40px}
+.big-word{font-size:clamp(64px,12vw,174px);line-height:.82;font-weight:1000;letter-spacing:-.09em;color:#e8ebef;user-select:none;overflow-wrap:break-word}
+.big-word span{color:#e7e9ec}
+.big-word .pink{color:var(--accent)}
+.hero-copy{max-width:720px;margin:70px auto 0;padding:0 10px}
+.hero-copy h1{font-size:clamp(32px,5vw,68px);line-height:1.02;letter-spacing:-.055em;margin:0 0 18px;overflow-wrap:break-word}
+.hero-copy h1 em{font-style:normal;color:var(--accent)}
+.hero-copy p{font-size:18px;line-height:1.7;color:var(--muted);margin:0 auto;max-width:650px}
+.prompt-shell{max-width:860px;margin:36px auto 0;padding:10px;border-radius:28px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);border:1px solid rgba(255,255,255,.8);text-align:left;width:100%}
+.prompt{min-height:108px;border-radius:20px;padding:18px 20px;box-shadow:var(--inset);display:flex;flex-direction:column;justify-content:space-between;gap:16px}
+.prompt-top{color:#9aa0a9;font-size:16px;line-height:1.5;min-height:24px;word-break:break-word}
+.prompt-bottom{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.prompt-tools{display:flex;gap:9px;align-items:center}
+.icon{width:38px;height:38px;border:0;border-radius:12px;background:var(--surface);box-shadow:5px 5px 11px rgba(160,168,180,.25),-5px -5px 11px white;cursor:pointer;color:#636973;display:grid;place-items:center}
+.mode{color:#626871;font-weight:800;font-size:14px;margin-left:auto;margin-right:8px}
+.section{padding:100px 20px}
+.container{width:min(1120px,100%);margin:auto}
+.section-head{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:36px;flex-wrap:wrap}
+.section-head h2{font-size:clamp(32px,5vw,58px);line-height:1;letter-spacing:-.06em;margin:0}
+.section-head p{max-width:430px;color:var(--muted);line-height:1.7;margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.card{border-radius:28px;padding:28px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);border:1px solid rgba(255,255,255,.85);transition:.3s}
+.card:hover{transform:translateY(-8px)}
+.card-icon{width:56px;height:56px;border-radius:18px;display:grid;place-items:center;background:var(--surface);box-shadow:var(--inset),8px 8px 18px rgba(170,178,190,.18);font-size:24px;margin-bottom:22px}
+.card h3{font-size:22px;margin:0 0 10px;letter-spacing:-.03em}
+.card p{color:var(--muted);line-height:1.65;margin:0}
+.demo{padding:24px;border-radius:34px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);border:1px solid white;overflow:hidden}
+.app-window{border-radius:27px;overflow:hidden;background:#eef1f5;box-shadow:var(--inset);display:grid;grid-template-columns:220px 1fr;min-height:520px;width:100%}
+.sidebar{padding:22px;border-right:1px solid rgba(20,23,28,.06);background:rgba(255,255,255,.25)}
+.side-title{font-weight:900;margin:5px 0 24px}
+.side-item{padding:12px 13px;border-radius:13px;color:#747a83;font-size:13px;font-weight:750;margin:5px 0;cursor:pointer}
+.side-item.active{color:#20242a;background:var(--surface);box-shadow:5px 5px 12px rgba(160,168,180,.18),-5px -5px 12px white}
+.chat{padding:30px;display:flex;flex-direction:column}
+.chat-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:10px}
+.chat-head h3{margin:0;font-size:20px}
+.status{font-size:12px;color:#777d85;background:var(--surface);padding:6px 10px;border-radius:999px;box-shadow:3px 3px 8px rgba(160,168,180,.18),-3px -3px 8px white;font-weight:700}
+.message{max-width:700px;margin-top:20px;padding:22px;border-radius:22px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);line-height:1.7;color:#555b64;word-break:break-word}
+.chat-prompt{padding:9px;border-radius:21px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);border:1px solid rgba(255,255,255,.9);display:flex;gap:10px;align-items:center;margin-top:28px}
+#chatInput{flex:1;border:0;outline:0;background:transparent;padding:12px 14px;font-weight:600;color:var(--text);font-size:15px}
+.cta{padding:110px 20px}
+.cta-box{position:relative;overflow:hidden;text-align:center;padding:75px 30px;border-radius:38px;background:var(--surface);box-shadow:var(--shadow1),var(--shadow2);border:1px solid white}
+.cta-box h2{font-size:clamp(32px,5vw,56px);line-height:.95;margin:0 0 16px}
+.cta-box p{max-width:540px;margin:0 auto 24px;color:var(--muted);line-height:1.7}
+footer{padding:30px 20px 45px}
+.footer{width:min(1120px,100%);margin:auto;display:flex;justify-content:space-between;gap:20px;color:#7c828b;font-size:12px;font-weight:700;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:25px;transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:13px 18px;border-radius:16px;background:#20242a;color:white;font-size:13px;font-weight:800;z-index:100;transition:.3s}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(max-width:850px){.navlinks{display:none}.grid{grid-template-columns:1fr}.app-window{grid-template-columns:1fr}.sidebar{display:none}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="noise"></div>
+<nav class="nav">
+  <a class="brand" href="#"><span class="brand-dot"></span><span>Think Creative</span></a>
+  <div class="navlinks"><a href="#features">Features</a><a href="#workspace">Workspace</a><a href="#about">About</a></div>
+  <div class="nav-actions"><button class="btn btn-soft" onclick="toast('Demo ready')">Log in</button><a class="btn btn-primary" href="#workspace">Try AI</a></div>
+</nav>
+<section class="hero" id="about">
+  <div class="hero-orb"></div>
+  <div class="hero-content">
+    <div class="eyebrow"><i></i> Creative AI workspace</div>
+    <div class="title-wrap"><div class="big-word"><span>THINK</span><br><span class="pink">CREATIVE</span></div></div>
+    <div class="hero-copy">
+      <h1>Turn a simple idea into <em>something real.</em></h1>
+      <p>Chat, brainstorm, write, design and build with an AI workspace made for creative people.</p>
+    </div>
+  </div>
+</section>
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-head"><h2>One AI.<br>Many workflows.</h2></div>
+    <div class="grid">
+      <article class="card"><div class="card-icon">✦</div><h3>Creative Chat</h3><p>Focused conversation workspace.</p></article>
+      <article class="card"><div class="card-icon">⌘</div><h3>Build Mode</h3><p>Structured product generation.</p></article>
+      <article class="card"><div class="card-icon">◌</div><h3>Smart Context</h3><p>Keep references together.</p></article>
+    </div>
+  </div>
+</section>
+<div class="toast" id="toast"></div>
+<script>
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000);}
+</script>
+</div>
+</body>
+</html>`,
+        versions: [
+          {
+            version: 1,
+            content: `<!DOCTYPE html>...`,
+            timestamp: '2026-09-27T00:00:00.000Z',
+            changelog: 'Preserved complete Master Design Reference source with CSS tokens, neumorphic shadows, and responsive layout.',
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 /**

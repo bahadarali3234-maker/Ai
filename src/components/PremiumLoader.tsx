@@ -41,76 +41,11 @@ export const PremiumLoader: React.FC<PremiumLoaderProps> = ({ onLoaded }) => {
   const [statusShow, setStatusShow] = useState(false);
   const [flash, setFlash] = useState(false);
 
-  // Audio system (pure browser Web Audio, completely optional and non-blocking)
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const masterGainRef = useRef<GainNode | null>(null);
-
-  const initAudio = () => {
-    if (audioContextRef.current) return;
-    try {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        const master = ctx.createGain();
-        master.gain.value = 0.055;
-        master.connect(ctx.destination);
-        audioContextRef.current = ctx;
-        masterGainRef.current = master;
-      }
-    } catch {
-      // Audio is non-critical; animations proceed regardless
-    }
-  };
-
-  const playTone = (freq: number, dur: number, type: OscillatorType = 'sine', gain = 0.035, delay = 0) => {
-    try {
-      const ctx = audioContextRef.current;
-      const master = masterGainRef.current;
-      if (!ctx || !master || ctx.state !== 'running') return;
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = type;
-      o.frequency.setValueAtTime(freq, ctx.currentTime + delay);
-      g.gain.setValueAtTime(0, ctx.currentTime + delay);
-      g.gain.linearRampToValueAtTime(gain, ctx.currentTime + delay + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + dur);
-      o.connect(g);
-      g.connect(master);
-      o.start(ctx.currentTime + delay);
-      o.stop(ctx.currentTime + delay + dur + 0.03);
-    } catch {
-      // ignore
-    }
-  };
-
-  const playWhoosh = () => {
-    try {
-      const ctx = audioContextRef.current;
-      const master = masterGainRef.current;
-      if (!ctx || !master || ctx.state !== 'running') return;
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = 'sawtooth';
-      o.frequency.setValueAtTime(120, ctx.currentTime);
-      o.frequency.exponentialRampToValueAtTime(850, ctx.currentTime + 0.55);
-      g.gain.setValueAtTime(0.001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.055, ctx.currentTime + 0.08);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-      o.connect(g);
-      g.connect(master);
-      o.start();
-      o.stop(ctx.currentTime + 0.62);
-    } catch {
-      // ignore
-    }
-  };
-
-  const playClickEffect = () => {
-    playTone(700, 0.055, 'square', 0.025);
-    playTone(1200, 0.04, 'sine', 0.018, 0.045);
-  };
+  // Loading screen audio/voice completely removed per user request: "loding screen ka sera voice ko ketham ker do"
+  const initAudio = () => {};
+  const playTone = (..._args: any[]) => {};
+  const playWhoosh = (..._args: any[]) => {};
+  const playClickEffect = (..._args: any[]) => {};
 
   // Preload actual assets immediately
   useEffect(() => {

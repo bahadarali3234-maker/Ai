@@ -48,14 +48,41 @@ import {
   Layers,
   ArrowRight,
   Brain,
+  Lock,
+  LogOut,
+  ArrowDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AttachedFile, QuestionBlock, ProjectMemory, MemoryContextPackage } from '../types';
 import { WebsitePreviewModal } from './WebsitePreviewModal';
+import { FullScreenCodeEditorModal } from './FullScreenCodeEditorModal';
 import { ProjectMemoryDrawer } from './ProjectMemoryDrawer';
 import { TimetableImageCard, TimetableSlot } from './TimetableImageCard';
 import { MessageTopImageGallery } from './MessageTopImageGallery';
 import { memoryManager } from '../utils/memoryManager';
+import {
+  subscribeToAuth,
+  subscribeToUserChatThreads,
+  syncChatThreadToFirestore,
+  deleteChatThreadFromFirestore,
+  getCurrentUser,
+  logOut,
+} from '../firebase';
+
+/**
+ * Strips raw HTML image tags and markdown image links from text
+ * so images are only displayed natively in the gallery
+ */
+export function sanitizeImageMarkupFromText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/!\[.*?\]\([^)]+\)/gi, '')
+    .replace(/<img[^>]*>/gi, '')
+    .replace(/<a[^>]*href=["'][^"']*\.(?:png|jpg|jpeg|webp|gif)[^"']*["'][^>]*>.*?<\/a>/gi, '')
+    .replace(/\[(?:Image|Photo|Reference|Preview|Picture)\]\([^)]+\)/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export function isSimpleMessage(text?: string): boolean {
   if (!text) return false;
@@ -67,6 +94,119 @@ export function isSimpleMessage(text?: string): boolean {
     'great', 'awesome'
   ];
   return simple.includes(clean);
+}
+
+/**
+ * Evaluates whether an AI message is an "important message" that warrants real visual reference images.
+ * Strict user rule:
+ * "Go refance image deni ha wo her massage ka Sath ni deni wo bus important massage ka Sath deni ha"
+ * - NOT with every message!
+ * - NOT with greetings, short casual chat, chit-chat, confirmations, or clarification questions.
+ * - ONLY with important messages:
+ *   1. User explicitly requested visuals/photos/images/references ("image", "photo", "pic", "tasveer", "dikhao", "look like", "show me")
+ *   2. The message is discussing a concrete visual subject (e.g. cars/automotive, sports/athletes, celebrities/personalities, places/cities, tech devices/gadgets, animals/nature, designs/architecture, timetables/workouts)
+ *   3. Substantial structured explanation (has structuredContent with mainTitle or multiple sections)
+ */
+export function shouldShowReferenceImagesForMessage(
+  message: any,
+  promptBanner?: string,
+  userPromptText?: string
+): boolean {
+  if (!message || !message.text) return false;
+
+  const rawText = message.text.replace(/```question[\s\S]*?```/gi, '').trim();
+  const lowerText = rawText.toLowerCase();
+  const lowerPrompt = (userPromptText || promptBanner || '').toLowerCase();
+
+  // 1. Never show images on simple greetings or conversational pleasantries
+  const isGreeting = /^(hi|hello|hey|salam|assalam|hola|good\s*(morning|afternoon|evening)|howdy|welcome)\b/i.test(lowerText);
+  if (isGreeting && rawText.length < 200 && !message.structuredContent?.mainTitle) {
+    return false;
+  }
+
+  // 2. Never show images on short conversational replies or acknowledgments
+  const isShortChitChat = /^(ok|okay|sure|thanks|thank\s*you|yes|no|got\s*it|understood|i\s*can\s*help|how\s*can\s*i\s*help)\b/i.test(lowerText);
+  if (isShortChitChat && rawText.length < 160) {
+    return false;
+  }
+
+  // 3. Never show images on clarification or active question prompt
+  if (message.activeQuestion || rawText.includes('```question')) {
+    return false;
+  }
+
+  // 4. Positive Trigger: User explicitly asked for image/picture/photo/visual
+  const isExplicitVisualRequest =
+    /(image|photo|picture|pic|wallpaper|reference|look\s*like|visual|dikhao|tasveer|banao|show\s*me|photograph|render)/i.test(lowerPrompt) ||
+    /(image|photo|picture|wallpaper|reference)/i.test(lowerText.slice(0, 80));
+  if (isExplicitVisualRequest) {
+    return true;
+  }
+
+  // 5. Positive Trigger: Concrete visual topic with real entity
+  const hasVisualEntity =
+    /(car|bmw|ferrari|mercedes|audi|porsche|lamborghini|supercar|vehicle|cricket|football|ronaldo|messi|babar|actor|celebrity|destination|place|travel|city|architecture|building|interior|device|phone|iphone|laptop|robot|animal|wildlife|tiger|lion|watch|fashion|luxury|workout|gym|timetable|fitness|landing\s*page|ui\s*design)/i.test(lowerPrompt) ||
+    /(car|bmw|ferrari|mercedes|audi|porsche|lamborghini|supercar|vehicle|cricket|ronaldo|messi|babar|celebrity|destination|travel|city|architecture|iphone|robot|animal|tiger|lion|luxury|workout|gym|timetable|fitness)/i.test(lowerText.slice(0, 150));
+
+  if (hasVisualEntity && rawText.length > 80) {
+    return true;
+  }
+
+  // 6. Positive Trigger: Substantive structured content with dedicated mainTitle
+  if (message.structuredContent?.mainTitle && rawText.length > 250) {
+    const titleStr = typeof message.structuredContent.mainTitle === 'string'
+      ? message.structuredContent.mainTitle
+      : `${(message.structuredContent.mainTitle as any).white || ''} ${(message.structuredContent.mainTitle as any).red || ''}`;
+    if (!/^(welcome|hello|hi|greeting)/i.test(titleStr.trim())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extracts the exact topic/search query that matches the actual reply message given.
+ * Matches: "Jo massage go replacly Daya ha us sa match ker or usa ka Sath da go massage walilad ha ha"
+ */
+export function extractImageSearchQueryFromMessage(
+  message: any,
+  promptBanner?: string,
+  userPromptText?: string
+): string {
+  // 1. If structuredContent has a clean mainTitle, use it (it reflects the exact subject answered)
+  if (message?.structuredContent?.mainTitle) {
+    const rawTitle = typeof message.structuredContent.mainTitle === 'string'
+      ? message.structuredContent.mainTitle
+      : `${(message.structuredContent.mainTitle as any).white || ''} ${(message.structuredContent.mainTitle as any).red || ''}`;
+    const cleanTitle = rawTitle.replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (cleanTitle.length > 2 && cleanTitle.length < 80) {
+      return cleanTitle;
+    }
+  }
+
+  // 2. Check user prompt for concrete entity or subject
+  if (userPromptText) {
+    const cleanedPrompt = userPromptText
+      .replace(/^(show|give|find|search|get|display|me|a|an|the|pictures?|photos?|images?|references?|of|about)\s+/gi, '')
+      .replace(/\b(please|karo|kero|dikhao|dena|chahiye|hai|batao)\b/gi, '')
+      .trim();
+    if (cleanedPrompt.length > 2 && cleanedPrompt.length < 60) {
+      return cleanedPrompt;
+    }
+  }
+
+  // 3. Fallback to promptBanner
+  if (promptBanner) {
+    const cleanBanner = promptBanner.replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (cleanBanner.length > 2 && cleanBanner.length < 80) {
+      return cleanBanner;
+    }
+  }
+
+  // 4. Extract first line or entity from message text
+  const firstLine = (message?.text || '').split('\n')[0].replace(/[#*`_]/g, '').trim();
+  return firstLine.slice(0, 60) || 'Visual Reference';
 }
 
 export function extractTimetableData(text: string): { title: string; slots: TimetableSlot[] } | null {
@@ -218,7 +358,12 @@ export function parseAIText(raw: string): {
   sections: SectionItem[];
 } {
   // Strip out any ```question ... ``` blocks completely so questions NEVER render in chat
-  const cleanedRaw = raw.replace(/```question[\s\S]*?```/gi, '').trim();
+  // Strip out any raw HTML <img> tags, markdown image links, or leaked image markup so text is purely clean
+  const cleanedRaw = raw
+    .replace(/```question[\s\S]*?```/gi, '')
+    .replace(/<img[^>]*>/gi, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/gi, '')
+    .trim();
   const lines = cleanedRaw.split('\n');
   let mainTitle: string | undefined;
   let intro = '';
@@ -524,372 +669,8 @@ export function extractQuestionBlock(raw: string): QuestionBlock | null {
   return null;
 }
 
-// Initial pre-populated chats matching the user's uploaded image
-const INITIAL_CHAT_DATA: Record<string, ChatThread> = {
-  'Daily Routine Timetable': {
-    id: 'daily-routine-timetable',
-    title: 'Daily Routine Timetable',
-    promptBanner: 'High-Performance Structured Daily Routine & Downloadable PNG Timetable',
-    messages: [
-      {
-        id: 'msg-drt-1',
-        sender: 'user',
-        text: 'create a timetable for my daily routine',
-        timestamp: '07:30 AM',
-      },
-      {
-        id: 'msg-drt-2',
-        sender: 'ai',
-        text: `Here is your high-performance daily routine timetable, strategically structured for maximum deep work, physical energy, and restorative sleep.
-
-- 05:30 AM - 06:30 AM: Morning Mobility & Hydration - [Morning] Wake up, 500ml lemon water, 15 min mobility.
-- 06:30 AM - 07:30 AM: High-Performance Workout - [Fitness] Strength training, mobility drills, cold shower.
-- 08:00 AM - 09:00 AM: Nutritious Fuel & Day Roadmap - [Nutrition] High protein fuel, identify top 3 priorities.
-- 09:00 AM - 12:30 PM: Deep Work Block 1 - [Deep Work] Uninterrupted focus on primary needle-moving projects.
-- 12:30 PM - 01:30 PM: Balanced Lunch & Sunlight Walk - [Nutrition] Whole foods meal and 20 min walk for circadian reset.
-- 01:30 PM - 05:00 PM: Deep Work Block 2 - [Deep Work] Secondary development, execution, and communication.
-- 05:00 PM - 06:30 PM: Skill Mastery & Creative Growth - [Evening] Reading, side engineering, or personal hobbies.
-- 06:30 PM - 08:00 PM: Dinner & Social Connection - [Nutrition] Nourishing dinner with family and relaxation.
-- 08:00 PM - 09:30 PM: Evening Wind-Down & Reflection - [Evening] Journaling, planning tomorrow, low blue light.
-- 09:30 PM - 10:30 PM: Reading & Sleep Preparation - [Sleep] Fiction reading, cool room temperature (19°C).
-- 10:30 PM: Restorative Deep Sleep - [Sleep] Lights out, 7.5 to 8 hours uninterrupted sleep.`,
-        timestamp: '07:31 AM',
-        thoughtDuration: 3,
-        structuredContent: {
-          mainTitle: 'Daily Routine Master Timetable',
-          intro: 'An optimized hourly schedule engineered for peak cognitive performance, physical endurance, and deep restorative recovery.',
-          sections: [
-            {
-              title: 'Executive Routine Structure',
-              description: 'This schedule follows circadian biological peaks, synchronizing deep focus during morning cortisol peaks and evening wind-down with melatonin production.',
-              bullets: [
-                'Early morning cortisol spike harnessed for intense physical training and high-leverage focus.',
-                'Two 3.5-hour deep work cycles with strict digital distraction elimination.',
-                'Circadian sunlight walking after lunch to sustain afternoon alertness.',
-                'Screen-free 60-minute sleep buffer to maximize REM and deep sleep cycles.',
-              ],
-            },
-            {
-              title: 'Interactive Web Timetable Code',
-              description: 'Standalone single-file responsive HTML timetable with dark obsidian glassmorphism:',
-              codeSnippet: `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Daily Routine Timetable</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    body { background: #0c0204; color: #ffffff; min-height: 100vh; padding: 2rem 1rem; display: flex; justify-content: center; }
-    .container { max-width: 900px; width: 100%; }
-    .header { text-align: center; margin-bottom: 2.5rem; padding: 2rem; background: radial-gradient(circle at top, rgba(255,24,40,0.15), transparent 70%); border-radius: 1.5rem; border: 1px solid rgba(255,24,40,0.3); }
-    .tag { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; background: rgba(255,24,40,0.2); color: #ff1828; border: 1px solid rgba(255,24,40,0.4); margin-bottom: 1rem; }
-    h1 { font-size: 2.25rem; font-weight: 800; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
-    p { color: #a1a1aa; font-size: 0.95rem; }
-    .timeline { display: flex; flex-direction: column; gap: 1rem; }
-    .slot { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 1.5rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; transition: all 0.2s ease; }
-    .slot:hover { border-color: rgba(255,24,40,0.5); transform: translateY(-2px); background: rgba(255,24,40,0.05); }
-    .time { font-family: monospace; font-weight: 700; font-size: 0.9rem; color: #ff6b78; background: rgba(255,24,40,0.12); padding: 0.4rem 0.8rem; border-radius: 0.5rem; border: 1px solid rgba(255,24,40,0.25); min-width: 140px; text-align: center; }
-    .activity { font-weight: 600; font-size: 1.05rem; flex: 1; margin: 0 1.5rem; color: #f4f4f5; }
-    .cat { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; padding: 0.3rem 0.75rem; border-radius: 9999px; background: rgba(255,255,255,0.08); color: #e4e4e7; border: 1px solid rgba(255,255,255,0.15); }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <span class="tag">● Verified Routine Architecture</span>
-      <h1>Daily Routine Master Timetable</h1>
-      <p>High-Performance Schedule for Deep Work, Energy, & Recovery</p>
-    </div>
-    <div class="timeline">
-      <div class="slot"><span class="time">05:30 - 06:30 AM</span><span class="activity">Morning Mobility & Hydration</span><span class="cat">Morning</span></div>
-      <div class="slot"><span class="time">06:30 - 07:30 AM</span><span class="activity">High-Performance Workout</span><span class="cat">Fitness</span></div>
-      <div class="slot"><span class="time">08:00 - 09:00 AM</span><span class="activity">Nutritious Fuel & Day Roadmap</span><span class="cat">Nutrition</span></div>
-      <div class="slot"><span class="time">09:00 - 12:30 PM</span><span class="activity">Deep Work Block 1 (High Leverage)</span><span class="cat">Deep Work</span></div>
-      <div class="slot"><span class="time">12:30 - 01:30 PM</span><span class="activity">Balanced Lunch & Sunlight Walk</span><span class="cat">Nutrition</span></div>
-      <div class="slot"><span class="time">01:30 - 05:00 PM</span><span class="activity">Deep Work Block 2 (Execution)</span><span class="cat">Deep Work</span></div>
-      <div class="slot"><span class="time">05:00 - 06:30 PM</span><span class="activity">Skill Mastery & Creative Pursuits</span><span class="cat">Evening</span></div>
-      <div class="slot"><span class="time">06:30 - 08:00 PM</span><span class="activity">Dinner & Social Connection</span><span class="cat">Nutrition</span></div>
-      <div class="slot"><span class="time">08:00 - 09:30 PM</span><span class="activity">Evening Wind-Down & Reflection</span><span class="cat">Evening</span></div>
-      <div class="slot"><span class="time">09:30 - 10:30 PM</span><span class="activity">Reading & Sleep Preparation</span><span class="cat">Sleep</span></div>
-      <div class="slot"><span class="time">10:30 PM</span><span class="activity">Restorative Deep Sleep</span><span class="cat">Sleep</span></div>
-    </div>
-  </div>
-</body>
-</html>`,
-              codeLanguage: 'html',
-              fileName: 'timetable.html',
-            },
-          ],
-        },
-      },
-    ],
-  },
-  'Website Discovery': {
-    id: 'website-discovery',
-    title: 'Website Discovery',
-    promptBanner: 'Interactive Task Questioning & Single-File HTML Generation',
-    messages: [
-      {
-        id: 'msg-wd-1',
-        sender: 'user',
-        text: 'Create a luxury automotive telemetry website with live dashboard',
-        timestamp: '10:20 AM',
-      },
-      {
-        id: 'msg-wd-2',
-        sender: 'ai',
-        text: 'Before generating your complete single-file website, let us configure the visual style to match your aesthetic standards.',
-        timestamp: '10:20 AM',
-        structuredContent: {
-          mainTitle: 'Website Requirement Discovery',
-          intro: 'High-end single-file HTML website generation requires key aesthetic and architectural decisions.',
-          sections: [
-            {
-              title: 'Design Protocol',
-              description: 'Please select your preferred visual style or provide a custom requirement below.',
-              bullets: [
-                'Embedded CSS styling with modern glassmorphism & responsive CSS grid.',
-                'Functional JavaScript telemetry simulator and interactive components.',
-                'Delivered in one single HTML file ready for instant download and live preview.',
-              ],
-            },
-          ],
-        },
-        activeQuestion: {
-          id: 'q-wd-1',
-          title: 'What visual style should the website use?',
-          description: 'Select the aesthetic foundation for your single-file luxury telemetry website.',
-          options: [
-            'Minimal Premium Dark',
-            'Glassmorphism & Crimson Neon',
-            'Futuristic Telemetry HUD',
-            'Luxury Editorial',
-          ],
-          isAnswered: false,
-        },
-      },
-    ],
-  },
-  'Landing Page Design': {
-    id: 'landing-page-design',
-    title: 'Landing Page Design',
-    promptBanner: 'Design a landing page — copy, layout and Tailwind markup',
-    messages: [
-      {
-        id: 'msg-lpd-1',
-        sender: 'user',
-        text: 'Design a landing page — copy, layout and Tailwind markup for EcoCycle',
-        timestamp: '10:14 AM',
-      },
-      {
-        id: 'msg-lpd-2',
-        sender: 'ai',
-        text: 'Here is the complete landing page design system for EcoCycle.',
-        timestamp: '10:14 AM',
-        structuredContent: {
-          mainTitle: 'Landing Page Design',
-          intro:
-            'The following design is for a fictional product called "EcoCycle", a smart recycling bin that helps users recycle more efficiently.',
-          sections: [
-            {
-              title: 'Copy',
-              description: 'The landing page will have the following sections:',
-              bullets: [
-                'Hero Section: Introduction to EcoCycle',
-                'Features Section: Key features of EcoCycle',
-                'Benefits Section: Benefits of using EcoCycle',
-                'Call-to-Action (CTA) Section: Encouraging users to sign up or learn more',
-              ],
-            },
-            {
-              title: 'Hero Section',
-              description:
-                'Headline: "Smarter Recycling, Zero Effort"\nSubheadline: "AI-guided sorting and instant carbon offset analytics inside your home."\nPrimary CTA: Pre-order Now\nSecondary CTA: Watch Demo (1 min)',
-              bullets: [
-                'High-contrast typography with Syne bold heading and clean sans body text.',
-                'Ambient crimson backlight behind floating 3D product render.',
-                'Interactive live carbon savings calculator widget.',
-              ],
-            },
-            {
-              title: 'AI Concept Prompt',
-              description: 'Midjourney & Imagen 3 visual generation prompt for the hero product render:',
-              promptSnippet: 'Ultra-realistic 8k cinematic studio photograph of EcoCycle smart recycling canister in an architect-designed Scandinavian kitchen, matte graphite finish with luminous red LED status halo, photorealistic depth of field, dramatic architectural lighting.',
-              isPrompt: true,
-            },
-            {
-              title: 'Tailwind Markup',
-              description: 'Production-ready component scaffolding for the hero section:',
-              codeSnippet: `<section className="relative min-h-[85vh] flex items-center justify-center bg-black text-white px-6 overflow-hidden">
-  <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,24,40,0.15),transparent_70%)]" />
-  <div className="relative z-10 max-w-4xl mx-auto text-center">
-    <h1 className="text-5xl md:text-7xl font-black uppercase tracking-tight">
-      Smarter Recycling, <span className="text-[#ff1828]">Zero Effort</span>
-    </h1>
-    <p className="mt-6 text-zinc-300 text-lg md:text-xl max-w-2xl mx-auto">
-      AI-guided optical sorting and real-time carbon offset telemetry for modern households.
-    </p>
-    <div className="mt-8 flex items-center justify-center gap-4">
-      <button className="px-8 py-4 rounded-full bg-[#ff1828] text-white font-bold shadow-[0_0_30px_rgba(255,24,40,0.7)] hover:scale-105 transition-all">
-        Pre-order Now
-      </button>
-      <button className="px-8 py-4 rounded-full bg-zinc-900/80 border border-white/20 text-white hover:bg-zinc-800 transition-all">
-        Explore Specs
-      </button>
-    </div>
-  </div>
-</section>`,
-              codeLanguage: 'tsx',
-            },
-          ],
-        },
-      },
-    ],
-  },
-  'Website Layout Ideas': {
-    id: 'website-layout-ideas',
-    title: 'Website Layout Ideas',
-    promptBanner: 'Modern layout architectures for luxury automotive brands',
-    messages: [
-      {
-        id: 'msg-wli-1',
-        sender: 'user',
-        text: 'Generate modern layout concepts for automotive websites',
-        timestamp: '09:30 AM',
-      },
-      {
-        id: 'msg-wli-2',
-        sender: 'ai',
-        text: 'Here are the layout architectures developed for high-performance automotive experiences.',
-        timestamp: '09:30 AM',
-        structuredContent: {
-          mainTitle: 'Website Layout Ideas',
-          intro:
-            'Dynamic grid systems and immersive full-viewport parallax architectures designed for high-performance visual storytelling.',
-          sections: [
-            {
-              title: 'Blueprint Architecture',
-              description: 'Core visual modules engineered for high visual velocity:',
-              bullets: [
-                'Dual-layer Interactive Spotlight Canvas with continuous cursor tracking.',
-                'Asymmetric Bento Grids with hyper-responsive glassmorphic cards.',
-                'Full-width Cinematic Video Portals with responsive aspect ratio locking.',
-                'Sticky Minimalist Navigation with ambient crimson underglow accents.',
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  },
-  'UI/UX Best Practices': {
-    id: 'ui-ux-best-practices',
-    title: 'UI/UX Best Practices',
-    promptBanner: 'High-conversion mobile UX best practices for dark mode',
-    messages: [
-      {
-        id: 'msg-ui-1',
-        sender: 'user',
-        text: 'What are the top UI/UX best practices for dark mode luxury design?',
-        timestamp: 'Yesterday',
-      },
-      {
-        id: 'msg-ui-2',
-        sender: 'ai',
-        text: 'Here are the curated UX guidelines for dark luxury software interfaces.',
-        timestamp: 'Yesterday',
-        structuredContent: {
-          mainTitle: { white: 'UI/UX Best', red: 'Practices' },
-          intro:
-            'Essential ergonomics, micro-interactions, and accessibility standards for dark-mode luxury interfaces.',
-          sections: [
-            {
-              title: 'Design Rules',
-              description: 'Follow these mathematical visual principles:',
-              bullets: [
-                'Thumb-zone action buttons with 48px minimum target size.',
-                'High-contrast typography strictly passing WCAG AA standards.',
-                'Micro-haptic visual feedback and spring transitions on critical actions.',
-                'Zero-latency optimistic UI updates with smooth spring physics.',
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  },
-  'Tailwind CSS Guide': {
-    id: 'tailwind-css-guide',
-    title: 'Tailwind CSS Guide',
-    promptBanner: 'Advanced Tailwind CSS patterns & glowing neon effects',
-    messages: [
-      {
-        id: 'msg-tw-1',
-        sender: 'user',
-        text: 'How to build BMW M neon glow effects with Tailwind CSS?',
-        timestamp: '2 days ago',
-      },
-      {
-        id: 'msg-tw-2',
-        sender: 'ai',
-        text: 'Here is the guide for crafting hypercar crimson glows with Tailwind.',
-        timestamp: '2 days ago',
-        structuredContent: {
-          mainTitle: { white: 'Tailwind CSS', red: 'Guide' },
-          intro:
-            'Mastering arbitrary variant classes, custom glowing shadows, and backdrop-filter techniques for hypercar interfaces.',
-          sections: [
-            {
-              title: 'Glow Syntax',
-              description: 'Key CSS and Tailwind utilities for high-impact neon:',
-              bullets: [
-                'Hardware accelerated glow: shadow-[0_0_25px_rgba(255,24,40,0.7)]',
-                'Double border depth: border-[1.5px] border-[#ff1828]',
-                'Inner volumetric light: inset_0_0_12px_rgba(255,24,40,0.35)',
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  },
-  'Product Marketing Plan': {
-    id: 'product-marketing-plan',
-    title: 'Product Marketing Plan',
-    promptBanner: 'Go-To-Market execution for high-tier hardware launch',
-    messages: [
-      {
-        id: 'msg-pmp-1',
-        sender: 'user',
-        text: 'Create a GTM marketing rollout plan for high-tier tech launch',
-        timestamp: '3 days ago',
-      },
-      {
-        id: 'msg-pmp-2',
-        sender: 'ai',
-        text: 'Here is the strategic rollout plan for premium market entrance.',
-        timestamp: '3 days ago',
-        structuredContent: {
-          mainTitle: { white: 'Product Marketing', red: 'Plan' },
-          intro:
-            'Quarterly rollout framework prioritizing exclusive influencer access, VIP reservations, and interactive digital reveals.',
-          sections: [
-            {
-              title: 'Phases',
-              description: 'Sequential release milestones:',
-              bullets: [
-                'Phase 1: Teaser campaign with dynamic countdown & secret reveal modal.',
-                'Phase 2: VIP early-bird access with private dashboard telemetry.',
-                'Phase 3: Global public showcase with live keynote streaming.',
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  },
-};
+// Without user login, no mock chats or past data are shown.
+const INITIAL_CHAT_DATA: Record<string, ChatThread> = {};
 
 /**
  * Universal browser file download helper for multi-format export
@@ -914,7 +695,51 @@ interface SpecialSnippetBoxProps {
   fileName?: string;
   onUseInChat?: (text: string) => void;
   onOpenFullScreenPreview?: (html: string, fileName?: string) => void;
+  onOpenFullScreenEditor?: (code: string, fileName?: string, language?: string) => void;
 }
+
+/**
+ * Opens standalone HTML website directly in a browser tab / localhost
+ * App me preview na chale per user request!
+ */
+export const openHtmlPreviewInBrowser = async (htmlContent: string, fileName = 'index.html') => {
+  try {
+    // 1. Try server preview endpoint first for a clean localhost/preview/:id URL
+    const res = await fetch('/api/preview-store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: htmlContent }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.url) {
+        const fullUrl = window.location.origin + data.url;
+        const newWin = window.open(fullUrl, '_blank');
+        if (newWin) return;
+      }
+    }
+  } catch (err) {
+    console.warn('Server preview endpoint notice:', err);
+  }
+
+  // 2. Direct Blob fallback in browser tab
+  try {
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+    const win = window.open(blobUrl, '_blank');
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.target = '_blank';
+      a.rel = 'noopener,noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  } catch (err) {
+    console.error('Failed to open preview in browser:', err);
+  }
+};
 
 // Download helper function for code files
 export const downloadCodeFile = (filename: string, content: string) => {
@@ -933,7 +758,7 @@ export const downloadCodeFile = (filename: string, content: string) => {
   }
 };
 
-// Formatted text helper to render AI responses in bold font styling with ultra-bold markdown highlights
+// Formatted text helper to render AI responses in bold luxury serif font styling (Cormorant Garamond / Bodoni / Playfair)
 export const renderFormattedBoldText = (text: string) => {
   if (!text) return null;
   const parts = text.split(/(\*\*[^*]+\*\*|__[^_]+__)/g);
@@ -946,14 +771,19 @@ export const renderFormattedBoldText = (text: string) => {
       return (
         <strong
           key={index}
-          className="font-black text-white tracking-wide drop-shadow-[0_0_12px_rgba(255,255,255,0.35)]"
+          className="font-black text-white tracking-[0.02em] font-luxury-serif"
+          style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 850 }}
         >
           {boldContent}
         </strong>
       );
     }
     return (
-      <span key={index} className="font-bold text-zinc-100 tracking-[0.01em]">
+      <span
+        key={index}
+        className="font-bold text-white tracking-[0.015em] font-luxury-serif"
+        style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
+      >
         {part}
       </span>
     );
@@ -1038,9 +868,9 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
   fileName,
   onUseInChat,
   onOpenFullScreenPreview,
+  onOpenFullScreenEditor,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [isPreview, setIsPreview] = useState(false);
   // Default to white background for code per user preference: "show White background every kind of code"
   const [codeTheme, setCodeTheme] = useState<'white' | 'dark'>('white');
 
@@ -1107,50 +937,34 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
   const lineCount = completeContent.split('\n').length;
 
   return (
-    <div className="mt-4 rounded-2xl bg-[#0e0407] border border-white/20 hover:border-[#ff1828]/50 transition-colors shadow-2xl overflow-hidden">
-      {/* Top Header Bar */}
-      <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 bg-[#180408] border-b border-white/10">
+    <div className="mt-4 rounded-[24px] sm:rounded-[28px] bg-white border border-zinc-200 shadow-[0_20px_50px_rgba(0,0,0,0.2),0_0_35px_rgba(255,24,40,0.06)] overflow-hidden transition-all text-zinc-900">
+      {/* Top Header Bar (Pure White Container matching Question card) */}
+      <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 bg-white border-b border-zinc-200">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-2.5 h-2.5 rounded-full bg-[#ff1828] shadow-[0_0_8px_#ff1828]" />
-          <span className="font-mono text-xs sm:text-sm font-bold text-white tracking-wide truncate">
+          <span className="font-mono text-xs sm:text-sm font-bold text-zinc-900 tracking-wide truncate">
             {resolvedFileName}
           </span>
-          <span className="text-[11px] font-semibold text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full shrink-0">
+          <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded-full shrink-0">
             {lineCount} lines • Scrollable
           </span>
         </div>
 
-        {/* Action Controls: Theme Toggle + 4 logo-icon options (Wide Screen, Copy, Preview, Save) */}
+        {/* Action Controls: 4 clean icon options (Wide Screen, Copy, Preview, Save) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* White / Dark Code Background Toggle */}
-          {!isPrompt && (
-            <button
-              type="button"
-              onClick={() => setCodeTheme((curr) => (curr === 'white' ? 'dark' : 'white'))}
-              className={`text-[10px] sm:text-xs font-semibold px-2.5 py-1 rounded-lg border transition-all cursor-pointer select-none ${
-                codeTheme === 'white'
-                  ? 'bg-white text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.4)]'
-                  : 'bg-black/60 text-zinc-300 border-white/15 hover:border-white/30'
-              }`}
-              title="Toggle White / Dark code background"
-            >
-              {codeTheme === 'white' ? 'White BG' : 'Dark BG'}
-            </button>
-          )}
-
-          {/* 1. Wide Screen */}
+          {/* 1. Wide Screen / Expand Button -> Opens Fullscreen In-App Code Editor */}
           <button
             type="button"
             onClick={() => {
-              if (onOpenFullScreenPreview) {
+              if (onOpenFullScreenEditor) {
+                onOpenFullScreenEditor(completeContent, resolvedFileName, language || (isPrompt ? 'text' : 'html'));
+              } else if (onOpenFullScreenPreview) {
                 onOpenFullScreenPreview(completeContent, resolvedFileName);
-              } else {
-                setIsPreview(true);
               }
             }}
-            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-[#ff1828]/25 hover:text-[#ff1828] text-zinc-300 flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-white/10 hover:border-[#ff1828]/40 shadow-sm"
-            title="Expand Full Screen"
-            aria-label="Expand Full Screen"
+            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 hover:text-[#ff1828] text-zinc-700 flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
+            title="Expand Full Screen Code Editor"
+            aria-label="Expand Full Screen Code Editor"
           >
             <Maximize2 size={15} />
           </button>
@@ -1159,31 +973,27 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
           <button
             type="button"
             onClick={handleCopy}
-            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-white/10 shadow-sm"
+            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 text-zinc-700 hover:text-black flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
             title="Copy Code"
             aria-label="Copy Code"
           >
             {copied ? (
-              <CheckCircle2 size={15} className="text-emerald-400" />
+              <CheckCircle2 size={15} className="text-[#ff1828]" />
             ) : (
               <Copy size={15} />
             )}
           </button>
 
-          {/* 3. Preview (Opens Full Screen Preview or inline HTML Sandbox) */}
+          {/* 3. HTML Preview: Opens directly in Google / Browser tab on localhost! App me preview na chale */}
           {isHtmlCode && (
             <button
               type="button"
               onClick={() => {
-                if (onOpenFullScreenPreview) {
-                  onOpenFullScreenPreview(completeContent, resolvedFileName);
-                } else {
-                  setIsPreview(!isPreview);
-                }
+                openHtmlPreviewInBrowser(completeContent, resolvedFileName);
               }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border shadow-sm bg-white/10 hover:bg-[#ff1828]/25 hover:text-[#ff1828] text-zinc-300 border-white/10 hover:border-[#ff1828]/40"
-              title="Preview in Sandbox"
-              aria-label="Preview in Sandbox"
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border shadow-sm bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#ff1828] border-zinc-200"
+              title="Open Preview in Browser (Localhost)"
+              aria-label="Open Preview in Browser (Localhost)"
             >
               <Eye size={15} />
             </button>
@@ -1193,7 +1003,7 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
           <button
             type="button"
             onClick={handleDownload}
-            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-emerald-500/20 hover:text-emerald-400 text-zinc-300 flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-white/10 hover:border-emerald-500/40 shadow-sm"
+            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#ff1828] flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
             title="Download Complete File"
             aria-label="Download Complete File"
           >
@@ -1202,54 +1012,35 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
         </div>
       </div>
 
-      {/* Special Layout Content: Compact Scrollable Box or Live Sandbox */}
-      <div className="p-3 sm:p-4 bg-[#090204]">
-        {isPreview && isHtmlCode ? (
-          /* REAL LIVE PREVIEW SANDBOX (Actual rendered HTML code via Tailwind sandbox) */
-          <div className="rounded-xl overflow-hidden border border-white/20 bg-black flex flex-col shadow-2xl">
-            <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-900 border-b border-white/10 text-xs text-zinc-400">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
-                <span className="ml-1 text-[11px] font-mono text-zinc-300">Live Sandbox Preview</span>
+      {/* Special Layout Content: Pure White Compact Scrollable Box or Live Sandbox */}
+      <div className="p-3 sm:p-4 bg-white">
+        {/* COMPACT SCROLLABLE CODE BOX: Pure White Background */}
+        <div className="rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-sm overflow-hidden">
+            {/* Scrollable Code Area (compact height, complete detail inside with line numbers) */}
+            <div className="max-h-64 sm:max-h-72 overflow-y-auto overflow-x-auto p-3.5 select-text bg-white">
+              <div className="flex font-mono text-xs sm:text-[13px] leading-relaxed">
+                {/* Line Numbers Column */}
+                {!isPrompt && (
+                  <div
+                    className="select-none pr-3 mr-3 text-right border-r border-zinc-200 text-zinc-400 font-mono font-medium bg-white"
+                    style={{ minWidth: '2.4rem' }}
+                  >
+                    {completeContent.split('\n').map((_, idx) => (
+                      <div key={idx} className="leading-relaxed">
+                        {idx + 1}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Complete Code Content in Pure White Container */}
+                <pre className="flex-1 font-mono text-xs sm:text-[13px] leading-relaxed whitespace-pre font-bold text-zinc-950 bg-white selection:bg-[#ff1828]/20">
+                  {completeContent}
+                </pre>
               </div>
-              <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Rendered Output
-              </span>
-            </div>
-            <iframe
-              srcDoc={generateLiveSandboxHtml(completeContent)}
-              title="Real Live HTML Preview"
-              sandbox="allow-scripts"
-              className="w-full h-80 border-0 bg-[#09090b]"
-            />
-          </div>
-        ) : (
-          /* COMPACT SCROLLABLE CODE BOX (User: "it don't show complete code in chat. Just so a little box and have scrollable detail code") */
-          <div
-            className={`rounded-xl border shadow-inner overflow-hidden transition-colors ${
-              codeTheme === 'white' && !isPrompt
-                ? 'bg-white border-zinc-300 text-zinc-900 shadow-[0_4px_20px_rgba(0,0,0,0.1)]'
-                : 'bg-[#050102] border-white/10 text-zinc-100 shadow-[0_4px_20px_rgba(0,0,0,0.6)]'
-            }`}
-          >
-            {/* Scrollable Code Area (compact height, complete detail inside) */}
-            <div className="max-h-72 sm:max-h-80 overflow-y-auto overflow-x-auto p-4 select-text">
-              <pre
-                className={`font-mono text-xs sm:text-[13px] leading-relaxed whitespace-pre font-medium ${
-                  codeTheme === 'white' && !isPrompt
-                    ? 'text-zinc-900 selection:bg-[#ff1828]/25'
-                    : 'text-zinc-100 selection:bg-[#ff1828]/40'
-                }`}
-              >
-                {completeContent}
-              </pre>
             </div>
 
             {isPrompt && onUseInChat && (
-              <div className="flex justify-end p-2.5 border-t border-white/10 bg-black/40">
+              <div className="flex justify-end p-2.5 border-t border-zinc-200 bg-zinc-50">
                 <button
                   type="button"
                   onClick={() => onUseInChat(content)}
@@ -1261,8 +1052,112 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
               </div>
             )}
           </div>
-        )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * Live Stream & Message Renderer with instant separation of conversational text vs code boxes
+ * Satisfies User Directives:
+ * 1. "First of all, you can write this answer with the animation. Not apply at last when you generate everything okay"
+ * 2. "And on code don't show typing animation. It is in when it write code. Make it faster but have simulation animation"
+ * 3. "it don't show complete code in chat. Just so a little box and have scrollable detail code... White background every kind of code"
+ * 4. "always answer in bold. Make it more bold. It's not bold, okay?"
+ */
+export const LiveMessageStreamRenderer: React.FC<{
+  rawText: string;
+  isStreaming?: boolean;
+  onOpenPreview?: (html: string, fileName?: string) => void;
+  onOpenEditor?: (code: string, fileName?: string, language?: string) => void;
+  onUseInChat?: (prompt: string) => void;
+}> = ({ rawText, isStreaming = false, onOpenPreview, onOpenEditor, onUseInChat }) => {
+  if (!rawText) return null;
+
+  // Split on code fences: ```[lang] [filename]?\n[code]```
+  const fenceRegex = /```([a-zA-Z0-9_-]+)?(?::([^\n]+))?\n([\s\S]*?)(?:```|$)/g;
+  const segments: { type: 'text' | 'code'; content: string; language?: string; fileName?: string }[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = fenceRegex.exec(rawText)) !== null) {
+    const textBefore = rawText.slice(lastIndex, match.index);
+    if (textBefore.trim()) {
+      segments.push({ type: 'text', content: textBefore });
+    }
+    const lang = match[1] || '';
+    const fn = match[2];
+    const code = match[3] || '';
+    segments.push({
+      type: 'code',
+      content: code,
+      language: lang,
+      fileName: fn,
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  const trailingText = rawText.slice(lastIndex);
+  if (trailingText.trim() || segments.length === 0) {
+    segments.push({ type: 'text', content: trailingText || rawText });
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Enhanced typing state indicator when actively streaming */}
+      {isStreaming && (
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/90 border border-zinc-700/80 shadow-md text-xs text-zinc-200 font-bold mb-1 select-none">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ff1828] opacity-80" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#ff1828]" />
+          </span>
+          <span className="tracking-wide">Generating live response</span>
+          <span className="inline-flex gap-1 items-center ml-0.5">
+            <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.3s]" />
+            <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.15s]" />
+            <span className="w-1 h-1 bg-white rounded-full animate-bounce" />
+          </span>
+        </div>
+      )}
+
+      {segments.map((seg, idx) => {
+        if (seg.type === 'code') {
+          return (
+            <div key={`seg-code-${idx}`} className="space-y-1.5">
+              <SpecialSnippetBox
+                type="code"
+                content={seg.content}
+                language={seg.language || 'html'}
+                fileName={seg.fileName}
+                onOpenFullScreenPreview={onOpenPreview}
+                onOpenFullScreenEditor={onOpenEditor}
+                onUseInChat={onUseInChat}
+              />
+            </div>
+          );
+        }
+
+        const isLastSegment = idx === segments.length - 1;
+        return (
+          <div
+            key={`seg-text-${idx}`}
+            className="text-white text-lg sm:text-xl md:text-[22px] leading-relaxed whitespace-pre-line font-bold select-text font-luxury-serif tracking-[0.015em]"
+            style={{
+              fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif",
+              fontWeight: 750,
+              textRendering: 'optimizeLegibility',
+              WebkitFontSmoothing: 'antialiased',
+            }}
+          >
+            {renderFormattedBoldText(seg.content)}
+            {isStreaming && isLastSegment && (
+              <span className="inline-flex items-center ml-1.5 align-middle select-none">
+                <span className="inline-block w-2.5 h-5 bg-gradient-to-t from-white via-zinc-100 to-white rounded-[2px] shadow-[0_0_12px_rgba(255,255,255,0.95),0_0_20px_rgba(255,24,40,0.6)] animate-pulse" />
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -1417,25 +1312,65 @@ export const CompactThinkingPanel: React.FC<CompactThinkingPanelProps> = ({
   onClose,
 }) => {
   const text = (message?.text || '').toLowerCase();
-  const isWebsite = /<!doctype\s+html|<html|<style|website|landing\s*page|web\s*app|portfolio|index\.html/i.test(text);
-  const isCode = /```(tsx|typescript|jsx|javascript|python|css|sql|json|bash|html)/i.test(text);
+  const hasAttachments = Boolean(message?.attachments && message.attachments.length > 0);
+  const isReferenceSearch = /bmw|m4|reference|image|photo|picture|find.*image|show.*image/i.test(text);
+  const isNavOrEdit = /navigation|nav\b|navbar|modify.*website|change.*button|button.*style|update.*site|edit.*code/i.test(text);
+  const isCodeDebug = /javascript|button.*not.*working|error|bug|fix|function|issue|trace|event/i.test(text);
+  const isTimetable = /timetable|time\s*table|routine|schedule|planner|day\s*plan|workout/i.test(text);
+  const isWebsite = !isNavOrEdit && /<!doctype\s+html|<html|<style|website|landing\s*page|web\s*app|portfolio|index\.html/i.test(text);
+  const isCode = !isWebsite && /```(tsx|typescript|jsx|javascript|python|css|sql|json|bash|html)/i.test(text);
   const isQuestion = Boolean(message?.activeQuestion) || /```question/i.test(text);
 
   let steps = [
     { title: 'Deconstructing request', desc: 'Analyzed user requirements, constraints, and objective scope.' },
-    { title: 'Checking system context', desc: 'Loaded model parameters, memory context, and design standards.' },
+    { title: 'Checking conversational context', desc: 'Loaded project parameters, memory context, and response standards.' },
     { title: 'Formulating optimal solution', desc: 'Structured high-precision response architecture.' },
-    { title: 'Executing primary pipeline', desc: 'Streamed comprehensive result through flagship intelligence engine.' },
+    { title: 'Executing primary pipeline', desc: 'Synthesized comprehensive result with verified accuracy.' },
     { title: 'Verifying output quality', desc: 'Validated accuracy, clarity, and structural completeness.' },
   ];
 
-  if (isWebsite) {
+  if (isReferenceSearch) {
     steps = [
-      { title: 'Analyzing website specifications', desc: 'Extracted visual hierarchy, responsive layout needs, and branding requirements.' },
+      { title: 'Identified requested vehicle & subject', desc: 'Parsed target visual specifications and model identity.' },
+      { title: 'Searched Google & web image databases', desc: 'Queried verified reference archives for authentic photographic matches.' },
+      { title: 'Filtered for relevant visual matches', desc: 'Eliminated low-res assets and verified exterior/interior angles.' },
+      { title: 'Selected suitable references', desc: 'Compiled high-definition visual assets with direct Google sources.' },
+    ];
+  } else if (isNavOrEdit) {
+    steps = [
+      { title: 'Located previous project & website', desc: 'Retrieved latest artifact version from persistent memory.' },
+      { title: 'Examined existing navigation structure', desc: 'Analyzed layout hierarchy, interactive components, and CSS styles.' },
+      { title: 'Applied requested modification', desc: 'Updated target component while strictly preserving untouched code.' },
+      { title: 'Checked overall layout stability', desc: 'Verified responsiveness and ensured all interactive triggers function.' },
+    ];
+  } else if (isCodeDebug) {
+    steps = [
+      { title: 'Reviewed relevant code structure', desc: 'Examined syntax, DOM references, and script boundaries.' },
+      { title: 'Traced button event flow', desc: 'Followed click dispatch, listeners, and state mutation chain.' },
+      { title: 'Identified likely failure point', desc: 'Isolated scope or handler discrepancy causing unresponsive behavior.' },
+      { title: 'Formulated correction & verified interaction', desc: 'Synthesized clean, functional fix with expected interactive feedback.' },
+    ];
+  } else if (isTimetable) {
+    steps = [
+      { title: 'Analyzed schedule preferences', desc: 'Evaluated wake-up window, primary focus targets, and energy peaks.' },
+      { title: 'Structured deep work & recovery blocks', desc: 'Organized balanced hourly intervals for peak productivity and wellbeing.' },
+      { title: 'Synthesized chronological timetable', desc: 'Generated structured bullet points and interactive categories.' },
+      { title: 'Prepared high-resolution export canvas', desc: 'Calibrated 2X retina graphic card for one-click PNG download.' },
+    ];
+  } else if (isWebsite) {
+    steps = [
+      { title: 'Analyzed website specifications', desc: 'Extracted visual hierarchy, responsive layout needs, and branding requirements.' },
       { title: 'Architecting single-file structure', desc: 'Structured semantic HTML5 layout from <!DOCTYPE html> down to </html>.' },
       { title: 'Crafting responsive CSS styling', desc: 'Embedded modern dark mode aesthetic, typography, and fluid mobile/desktop breakpoints.' },
       { title: 'Implementing JavaScript functionality', desc: 'Engineered client-side interactivity, event listeners, and dynamic UI state.' },
       { title: 'Verifying complete code integrity', desc: 'Checked syntax and ensured tags are cleanly closed with zero placeholders.' },
+    ];
+  } else if (hasAttachments) {
+    steps = [
+      { title: 'Ingested attached media asset', desc: 'Parsed multimodal format, dimension, and content stream.' },
+      { title: 'Analyzed visual patterns & features', desc: 'Extracted key optical details, typography, and design elements.' },
+      { title: 'Mapped insights to response synthesis', desc: 'Correlated visual evidence with user inquiry directives.' },
+      { title: 'Finalized recommendations', desc: 'Formatted detailed findings with prominent bold typography.' },
     ];
   } else if (isCode) {
     steps = [
@@ -1463,7 +1398,7 @@ export const CompactThinkingPanel: React.FC<CompactThinkingPanelProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between pb-2.5 border-b border-zinc-100 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-emerald-500/15 text-emerald-600 flex items-center justify-center shrink-0">
+          <div className="w-5 h-5 rounded-full bg-[#ff1828]/10 text-[#ff1828] flex items-center justify-center shrink-0">
             <Check size={12} strokeWidth={3} />
           </div>
           <span className="text-xs sm:text-sm font-bold text-zinc-900 tracking-tight">
@@ -1485,7 +1420,7 @@ export const CompactThinkingPanel: React.FC<CompactThinkingPanelProps> = ({
       <div className="flex-1 overflow-y-auto pr-1 pt-2 space-y-2.5 text-xs text-zinc-700 font-sans">
         {steps.map((st, idx) => (
           <div key={idx} className="flex items-start gap-2.5">
-            <div className="w-5 h-5 rounded-full bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
+            <div className="w-5 h-5 rounded-full bg-zinc-100 text-zinc-700 flex items-center justify-center shrink-0 mt-0.5">
               <Check size={11} strokeWidth={2.5} />
             </div>
             <div>
@@ -1808,7 +1743,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
 
             {/* Step 5: Code & Artifact Assembly */}
             <div className="relative">
-              <div className="absolute -left-[33px] sm:-left-[41px] top-1 w-5 h-5 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+              <div className="absolute -left-[33px] sm:-left-[41px] top-1 w-5 h-5 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-zinc-300">
                 <Code2 size={12} />
               </div>
               <div className="pl-1 space-y-1">
@@ -1834,7 +1769,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
                   {message?.text ? `${message.text.length} characters synthesized` : 'Active streaming in progress'}
                 </div>
               </div>
-              <span className="text-xs font-mono text-emerald-400">Active</span>
+              <span className="text-xs font-mono text-zinc-300">Active</span>
             </div>
 
             <div className="p-3.5 rounded-2xl bg-black/40 border border-white/10 flex items-center justify-between">
@@ -1846,7 +1781,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
                   4 Topic-related high-res assets with lightbox & download
                 </div>
               </div>
-              <span className="text-xs font-mono text-emerald-400">Ready</span>
+              <span className="text-xs font-mono text-zinc-300">Ready</span>
             </div>
 
             <div className="p-3.5 rounded-2xl bg-black/40 border border-white/10 flex items-center justify-between">
@@ -1858,7 +1793,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
                   2X Retina PNG generator with one-click export
                 </div>
               </div>
-              <span className="text-xs font-mono text-emerald-400">Initialized</span>
+              <span className="text-xs font-mono text-zinc-300">Initialized</span>
             </div>
           </div>
         )}
@@ -1902,6 +1837,7 @@ interface FullScreenChatViewProps {
   initialAttachments?: AttachedFile[];
   selectedRecentTopic?: string;
   onSelectRecentTopic?: (topic: string) => void;
+  onOpenLogin?: () => void;
 }
 
 export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
@@ -1909,11 +1845,112 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
   onClose,
   initialPrompt = '',
   initialAttachments,
-  selectedRecentTopic = 'Landing Page Design',
+  selectedRecentTopic = '',
   onSelectRecentTopic,
+  onOpenLogin,
 }) => {
-  const [chatThreads, setChatThreads] = useState<Record<string, ChatThread>>(INITIAL_CHAT_DATA);
+  const [chatThreads, setChatThreads] = useState<Record<string, ChatThread>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const guestSaved = localStorage.getItem('think_creative_guest_threads');
+        if (guestSaved) {
+          const parsed = JSON.parse(guestSaved);
+          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    return INITIAL_CHAT_DATA;
+  });
   const [activeTopic, setActiveTopic] = useState<string>(selectedRecentTopic);
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem('think_creative_user');
+      if (cached) {
+        try {
+          return JSON.parse(cached);
+        } catch {}
+      }
+    }
+    return getCurrentUser();
+  });
+
+  // Track Firebase Auth state continuously (saved permanently)
+  useEffect(() => {
+    const unsub = subscribeToAuth((user) => {
+      setCurrentUser(user);
+    });
+    return () => unsub();
+  }, []);
+
+  // Listen to Firestore real-time chats if user is logged in.
+  // If user is guest: restore guest threads from local storage so user can chat freely without logging in!
+  useEffect(() => {
+    if (!currentUser || !currentUser.uid) {
+      try {
+        const guestSaved = localStorage.getItem('think_creative_guest_threads');
+        if (guestSaved) {
+          const parsed = JSON.parse(guestSaved);
+          if (parsed && typeof parsed === 'object') {
+            setChatThreads(parsed);
+          }
+        }
+      } catch {}
+      return;
+    }
+
+    // When user logs in, migrate any existing guest chats to Firestore so the user doesn't lose anything
+    try {
+      const guestSaved = localStorage.getItem('think_creative_guest_threads');
+      if (guestSaved) {
+        const guestThreads = JSON.parse(guestSaved);
+        if (guestThreads && typeof guestThreads === 'object') {
+          Object.values(guestThreads).forEach((thread: any) => {
+            if (thread && thread.messages && thread.messages.length > 0) {
+              syncChatThreadToFirestore(thread, currentUser.uid);
+            }
+          });
+          localStorage.removeItem('think_creative_guest_threads');
+        }
+      }
+    } catch {}
+
+    const unsub = subscribeToUserChatThreads(currentUser.uid, (firestoreThreads) => {
+      setChatThreads((prev) => {
+        return {
+          ...firestoreThreads,
+          ...(prev[activeTopic] && prev[activeTopic].messages.some((m) => m.isStreaming)
+            ? { [activeTopic]: prev[activeTopic] }
+            : {}),
+        };
+      });
+    });
+
+    return () => unsub();
+  }, [currentUser?.uid, activeTopic]);
+
+  // Synchronize completed messages:
+  // - If logged in: save permanently to Firestore in real-time
+  // - If guest: save to localStorage (session history)
+  useEffect(() => {
+    if (!activeTopic || !chatThreads[activeTopic]) return;
+    const currentThread = chatThreads[activeTopic];
+    if (!currentThread.messages || currentThread.messages.length === 0) return;
+    if (currentThread.messages.some((m) => m.isStreaming)) return;
+
+    if (currentUser?.uid) {
+      const timer = setTimeout(() => {
+        syncChatThreadToFirestore(currentThread, currentUser.uid);
+      }, 500);
+      return () => clearTimeout(timer);
+    } else {
+      try {
+        localStorage.setItem('think_creative_guest_threads', JSON.stringify(chatThreads));
+      } catch {}
+    }
+  }, [chatThreads, activeTopic, currentUser?.uid]);
+
   const [inputVal, setInputVal] = useState<string>('');
   const [isAiTyping, setIsAiTyping] = useState<boolean>(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
@@ -2114,6 +2151,19 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
   const [exportMenuMsgId, setExportMenuMsgId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [fullscreenWebsite, setFullscreenWebsite] = useState<{ html: string; fileName: string } | null>(null);
+  const [fullscreenEditor, setFullscreenEditor] = useState<{
+    code: string;
+    fileName: string;
+    language: string;
+  } | null>(null);
+
+  const handleOpenEditor = (code: string, fileName?: string, language?: string) => {
+    setFullscreenEditor({
+      code,
+      fileName: fileName || 'index.html',
+      language: language || 'html',
+    });
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -2468,22 +2518,56 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
     showToast('Message deleted');
   };
 
-  const handleAnswerPromptQuestion = (answer: string) => {
+  const handleAnswerQuestionInChat = (msgId: string, answer: string) => {
     if (isAiTyping) return;
 
-    // Collect user selection silently without sending as a prompt message
+    // Collect user selection
     const qKey = promptQuestionIdx === 0 ? 'time' : 'focus';
     collectedAnswersRef.current[qKey] = answer;
     if (promptQuestionIdx === 0) collectedAnswersRef.current['theme'] = answer;
     if (promptQuestionIdx === 1) collectedAnswersRef.current['name'] = answer;
 
+    const userAnsMsg: ChatMessage = {
+      id: `user-ans-${Date.now()}`,
+      sender: 'user',
+      text: answer,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
     const nextIdx = promptQuestionIdx + 1;
     if (nextIdx < promptQuestionQueue.length) {
-      // Advance to next discovery question in prompt box
+      // Advance to next discovery question directly in chat
       setPromptQuestionIdx(nextIdx);
+      const nextQ = promptQuestionQueue[nextIdx];
+      const nextAiQMsg: ChatMessage = {
+        id: `ai-q-${Date.now()}`,
+        sender: 'ai',
+        text: '',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        activeQuestion: nextQ,
+      };
+
+      setChatThreads((prev) => {
+        const thread = prev[activeTopic];
+        if (!thread) return prev;
+        return {
+          ...prev,
+          [activeTopic]: {
+            ...thread,
+            messages: [
+              ...thread.messages.map((m) =>
+                m.id === msgId ? { ...m, activeQuestion: undefined, text: `Selected: **${answer}**` } : m
+              ),
+              userAnsMsg,
+              nextAiQMsg,
+            ],
+          },
+        };
+      });
+
       if (typeof window !== 'undefined' && 'vibrate' in navigator) {
         try {
-          navigator.vibrate(20);
+          navigator.vibrate(25);
         } catch {}
       }
     } else {
@@ -2491,13 +2575,12 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
       setPromptQuestionQueue([]);
       setPromptQuestionIdx(0);
 
-      const userPrompt = pendingVaguePromptRef.current || 'Create a complete daily routine timetable';
+      const userPrompt = pendingVaguePromptRef.current || 'Create a complete high-performance solution';
       const isTimetable =
         /(\btimetable\b|\btime\s*table\b|\broutine\b|\bdaily\s*routine\b|\bschedule\b|\bday\s*plan\b|\bplanner\b|\bstudy\s*plan\b|\bworkout\s*routine\b|\bworkout\s*plan\b)/i.test(
           userPrompt
         );
 
-      // DO NOT add user message like a prompt. Directly spawn AI placeholder and start thinking!
       const aiMsgId = `ai-${Date.now()}`;
       const aiPlaceholder: ChatMessage = {
         id: aiMsgId,
@@ -2514,7 +2597,13 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
           ...prev,
           [activeTopic]: {
             ...thread,
-            messages: [...thread.messages, aiPlaceholder],
+            messages: [
+              ...thread.messages.map((m) =>
+                m.id === msgId ? { ...m, activeQuestion: undefined, text: `Selected: **${answer}**` } : m
+              ),
+              userAnsMsg,
+              aiPlaceholder,
+            ],
           },
         };
       });
@@ -2593,6 +2682,14 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     }
   };
 
+  const handleAnswerPromptQuestion = (answer: string) => {
+    const thread = chatThreads[activeTopic];
+    const lastQMsg = thread?.messages.slice().reverse().find((m) => Boolean(m.activeQuestion));
+    if (lastQMsg) {
+      handleAnswerQuestionInChat(lastQMsg.id, answer);
+    }
+  };
+
   const handleAnswerQuestion = (_messageId: string, _question: QuestionBlock, answer: string) => {
     handleAnswerPromptQuestion(answer);
   };
@@ -2662,9 +2759,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           </style>
         </head>
         <body>
-          <span class="badge">Gemini AI Workspace Intelligence</span>
+          <span class="badge">AI Studio Intelligence</span>
           <h1>${title}</h1>
-          <p><em>Generated by Gemini AI Workspace • ${new Date().toLocaleDateString()}</em></p>
+          <p><em>Generated by AI Studio Intelligence Workspace • ${new Date().toLocaleDateString()}</em></p>
           <hr/>
           <div>${fullMarkdown.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>')}</div>
         </body>
@@ -2678,7 +2775,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         <html lang="en">
         <head>
           <meta charset="UTF-8">
-          <title>${title} — Gemini AI Export</title>
+          <title>${title} — AI Studio Intelligence</title>
           <style>
             body { background: #070709; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px; line-height: 1.7; }
             h1 { font-size: 2.2rem; color: #fff; border-bottom: 3px solid #ff1828; padding-bottom: 10px; }
@@ -2690,7 +2787,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           </style>
         </head>
         <body>
-          <div class="header-tag">Gemini AI Workspace Verified</div>
+          <div class="header-tag">AI Studio Verified</div>
           <h1>${title}</h1>
           <div>${fullMarkdown.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>')}</div>
         </body>
@@ -2724,10 +2821,10 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             </style>
           </head>
           <body>
-            <p style="color:#cc0000; font-weight:bold; font-size:10pt; text-transform:uppercase; letter-spacing:1px;">Gemini AI Intelligence Document</p>
+            <p style="color:#cc0000; font-weight:bold; font-size:10pt; text-transform:uppercase; letter-spacing:1px;">AI Intelligence Document</p>
             <h1>${title}</h1>
             <div>${fullMarkdown.replace(/\n\n/g, '<br/><br/>').replace(/\n/g, '<br/>')}</div>
-            <div class="footer">Generated by Google Gemini AI Workspace • ${new Date().toLocaleString()}</div>
+            <div class="footer">Generated by AI Studio Intelligence Workspace • ${new Date().toLocaleString()}</div>
             <script>
               window.onload = function() { window.print(); }
             </script>
@@ -2931,7 +3028,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         setTimeout(() => setVibratingMsgId((curr) => (curr === aiMsgId ? null : curr)), 500);
 
         const fullAnswer = accumulatedText || 'Response ready.';
-        const cleanFullAnswer = fullAnswer.replace(/```question[\s\S]*?```/gi, '').trim();
+        const cleanFullAnswer = sanitizeImageMarkupFromText(fullAnswer.replace(/```question[\s\S]*?```/gi, '').trim());
         fullGeneratedTextMap.current[aiMsgId] = cleanFullAnswer;
         const parsed = parseAIText(cleanFullAnswer);
 
@@ -2964,7 +3061,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                         parsed.mainTitle || parsed.intro || parsed.sections.length > 0
                           ? parsed
                           : undefined,
-                      activeQuestion: undefined,
+                      activeQuestion: extractedQuestion || undefined,
                     }
                   : m
               ),
@@ -3091,15 +3188,75 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     }
   }, [initialPrompt]);
 
-  // Auto scroll to bottom of chat
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
+  // Smart user-aware auto-scroll: strictly prevents viewport snapping down when user scrolls up
+  const userScrolledUpRef = useRef<boolean>(false);
+  const isAutoScrollingRef = useRef<boolean>(false);
+  const lastScrollTopRef = useRef<number>(0);
+  const touchStartYRef = useRef<number>(0);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
+
+  const handleChatScroll = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    if (isAutoScrollingRef.current) return;
+
+    const currentScrollTop = el.scrollTop;
+    const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
+
+    // Detect user actively scrolling up or already scrolled up away from bottom
+    if (currentScrollTop < lastScrollTopRef.current && distanceFromBottom > 15) {
+      userScrolledUpRef.current = true;
+      setShowScrollBottomBtn(true);
+    } else if (distanceFromBottom > 20) {
+      userScrolledUpRef.current = true;
+      setShowScrollBottomBtn(true);
+    } else if (distanceFromBottom <= 8) {
+      // User has returned all the way to the bottom
+      userScrolledUpRef.current = false;
+      setShowScrollBottomBtn(false);
+    }
+
+    lastScrollTopRef.current = currentScrollTop;
+  };
+
+  const scrollToBottom = (smooth = true) => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    isAutoScrollingRef.current = true;
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+
+    if (smooth) {
+      el.scrollTo({
+        top: el.scrollHeight,
         behavior: 'smooth',
       });
+    } else {
+      el.scrollTop = el.scrollHeight;
     }
-  }, [activeTopic, isAiTyping, chatThreads]);
+
+    setTimeout(() => {
+      isAutoScrollingRef.current = false;
+    }, 350);
+  };
+
+  // Only auto-scroll when switching topic
+  useEffect(() => {
+    userScrolledUpRef.current = false;
+    scrollToBottom(false);
+  }, [activeTopic]);
+
+  // When new messages or streaming chunks arrive: NEVER scroll down if user has scrolled up!
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    if (!el || userScrolledUpRef.current) return;
+
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Only keep sticky bottom if user was already at the absolute bottom
+    if (distanceFromBottom <= 15) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [chatThreads, isAiTyping]);
 
   const currentThread = chatThreads[activeTopic] || chatThreads['Landing Page Design'];
 
@@ -3124,6 +3281,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     setInputVal('');
     setChatAttachments([]);
     pendingAttachmentsRef.current = currentAtts;
+    userScrolledUpRef.current = false;
+    setShowScrollBottomBtn(false);
+    scrollToBottom(true);
 
     // Check if user is asking to create a timetable or routine
     const isTimetableRequest =
@@ -3138,23 +3298,6 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
       /(create|build|make|design|generate|develop|code|need|want).*(website|page|site|app|portfolio)/i.test(messageText));
 
     if (isTimetableRequest) {
-      // 1. Add ONLY user message to chat history (no question in chat, no AI placeholder yet)
-      setChatThreads((prev) => {
-        const existing = prev[activeTopic] || {
-          id: `thread-${Date.now()}`,
-          title: activeTopic,
-          promptBanner: messageText,
-          messages: [],
-        };
-        return {
-          ...prev,
-          [activeTopic]: {
-            ...existing,
-            messages: [...existing.messages, userMessage],
-          },
-        };
-      });
-
       const isWorkout = /workout|gym|fitness|exercise|training/i.test(messageText);
       const isStudy = /study|exam|revision|academic|homework/i.test(messageText);
 
@@ -3231,16 +3374,15 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         ];
       }
 
-      pendingVaguePromptRef.current = messageText;
-      collectedAnswersRef.current = {};
-      setPromptQuestionQueue(TIMETABLE_QUESTIONS);
-      setPromptQuestionIdx(0);
-      setIsSendLocked(false);
-      return;
-    }
+      // Add user message AND the first interactive question card directly IN CHAT
+      const aiFirstQMsg: ChatMessage = {
+        id: `ai-q-${Date.now()}`,
+        sender: 'ai',
+        text: '',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        activeQuestion: TIMETABLE_QUESTIONS[0],
+      };
 
-    if (isWebsiteOrAppRequest) {
-      // 1. Add ONLY user message to chat history (no question in chat, no AI placeholder yet)
       setChatThreads((prev) => {
         const existing = prev[activeTopic] || {
           id: `thread-${Date.now()}`,
@@ -3252,12 +3394,21 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           ...prev,
           [activeTopic]: {
             ...existing,
-            messages: [...existing.messages, userMessage],
+            messages: [...existing.messages, userMessage, aiFirstQMsg],
           },
         };
       });
 
-      // 2. Prepare discovery questions in prompt box queue
+      pendingVaguePromptRef.current = messageText;
+      collectedAnswersRef.current = {};
+      setPromptQuestionQueue(TIMETABLE_QUESTIONS);
+      setPromptQuestionIdx(0);
+      setIsSendLocked(false);
+      return;
+    }
+
+    if (isWebsiteOrAppRequest) {
+      // Prepare discovery questions
       const DISCOVERY_QUESTIONS: QuestionBlock[] = [
         {
           id: `q-theme-${Date.now()}`,
@@ -3280,6 +3431,31 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           ],
         },
       ];
+
+      // Add user message AND the first interactive question card directly IN CHAT
+      const aiFirstQMsg: ChatMessage = {
+        id: `ai-q-${Date.now()}`,
+        sender: 'ai',
+        text: '',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        activeQuestion: DISCOVERY_QUESTIONS[0],
+      };
+
+      setChatThreads((prev) => {
+        const existing = prev[activeTopic] || {
+          id: `thread-${Date.now()}`,
+          title: activeTopic,
+          promptBanner: messageText,
+          messages: [],
+        };
+        return {
+          ...prev,
+          [activeTopic]: {
+            ...existing,
+            messages: [...existing.messages, userMessage, aiFirstQMsg],
+          },
+        };
+      });
 
       pendingVaguePromptRef.current = messageText;
       collectedAnswersRef.current = {};
@@ -3468,7 +3644,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             reader.onloadend = async () => {
               const base64Audio = reader.result as string;
               try {
-                showToast('Transcribing with Groq / Gemini STT...');
+                showToast('Transcribing audio input...');
                 const sttRes = await fetch('/api/stt', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -3637,29 +3813,39 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
             {/* Scrollable container for recent items */}
             <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
-              {Object.keys(chatThreads).map((topic) => (
-                <button
-                  key={topic}
-                  type="button"
-                  onClick={() => handleSelectRecentChat(topic)}
-                  className="w-full px-3.5 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] text-zinc-200 hover:text-white border border-transparent group"
-                >
-                  <div className="flex items-center gap-3 truncate">
-                    <MessageSquare
-                      size={17}
-                      strokeWidth={1.8}
-                      className="text-zinc-400 group-hover:text-white shrink-0"
-                    />
-                    <span className="truncate text-[14px] text-white font-normal">
-                      {topic}
-                    </span>
-                  </div>
-                </button>
-              ))}
+              {Object.keys(chatThreads).length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-zinc-500">
+                  No chats yet. Start a new conversation!
+                </div>
+              ) : (
+                Object.keys(chatThreads).map((topic) => (
+                  <button
+                    key={topic}
+                    type="button"
+                    onClick={() => handleSelectRecentChat(topic)}
+                    className={`w-full px-3.5 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] border ${
+                      topic === activeTopic
+                        ? 'bg-white/[0.08] text-white border-white/15'
+                        : 'text-zinc-200 hover:text-white border-transparent'
+                    } group`}
+                  >
+                    <div className="flex items-center gap-3 truncate">
+                      <MessageSquare
+                        size={17}
+                        strokeWidth={1.8}
+                        className="text-zinc-400 group-hover:text-white shrink-0"
+                      />
+                      <span className="truncate text-[14px] text-white font-normal">
+                        {topic}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
           </div>
 
-          {/* Bottom Fixed Section: User Profile + Return to BMW Button */}
+          {/* Bottom Fixed Section: User Profile + Sign Out / Sign In + Return to BMW Button */}
           <div className="shrink-0 space-y-3 pt-3 border-t border-zinc-900">
             {/* Back to BMW Car Reveal Screen Button */}
             <button
@@ -3671,19 +3857,75 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               <span>Back to BMW Reveal</span>
             </button>
 
-            {/* User Profile Row */}
-            <div className="flex items-center justify-between px-2 pt-1 select-none">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[#0e0103] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_16px_rgba(255,24,40,0.8),inset_0_0_8px_rgba(255,24,40,0.4)]">
-                  <UserIcon size={19} className="fill-[#ff1828] text-[#ff1828]" />
+            {/* Menu Account Actions: Sign In (Guest) or Sign Out (Logged In) */}
+            {currentUser && !currentUser.isAnonymous ? (
+              <div className="flex items-center justify-between px-2.5 py-2 select-none rounded-xl bg-white/[0.04] border border-white/10">
+                <div className="flex items-center gap-2.5 min-w-0 truncate">
+                  <div className="w-9 h-9 rounded-full bg-[#0e0103] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_12px_rgba(255,24,40,0.6)] shrink-0 overflow-hidden">
+                    {currentUser?.photoURL ? (
+                      <img src={currentUser.photoURL} alt="Profile" className="w-full h-full object-cover" />
+                    ) : (
+                      <UserIcon size={17} className="fill-[#ff1828] text-[#ff1828]" />
+                    )}
+                  </div>
+                  <div className="flex flex-col truncate">
+                    <span className="text-[13px] font-semibold text-white leading-tight truncate">
+                      {currentUser.displayName || currentUser.email?.split('@')[0]}
+                    </span>
+                    <span className="text-[11px] text-zinc-400 truncate">
+                      {currentUser.email || 'Cloud Account'}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-[14px] font-semibold text-white leading-tight">User</span>
-                  <span className="text-xs text-zinc-400">Free Plan</span>
-                </div>
+
+                {/* Dedicated Sign Out Button in Menu */}
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    await logOut();
+                    showToast('Signed out successfully');
+                  }}
+                  className="ml-2 px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                  title="Sign Out"
+                >
+                  <LogOut size={13} />
+                  <span>Sign Out</span>
+                </button>
               </div>
-              <ChevronDown size={16} className="text-[#ff1828]" />
-            </div>
+            ) : (
+              <div
+                onClick={onOpenLogin}
+                className="flex items-center justify-between px-3 py-2 select-none cursor-pointer hover:bg-white/5 bg-white/[0.03] border border-white/10 rounded-xl transition-colors"
+                title="Click to sign in"
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <div className="w-9 h-9 rounded-full bg-[#0e0103] border-[1.5px] border-zinc-700 flex items-center justify-center text-zinc-400 shrink-0">
+                    <UserIcon size={16} />
+                  </div>
+                  <div className="flex flex-col truncate">
+                    <span className="text-[13px] font-semibold text-white leading-tight truncate">
+                      Guest User
+                    </span>
+                    <span className="text-[11px] text-zinc-400 truncate">
+                      Session Active
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dedicated Sign In Button in Menu */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenLogin?.();
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(255,24,40,0.4)] cursor-pointer shrink-0"
+                >
+                  Sign In
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -3728,10 +3970,43 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           {/* Chat Scrollable Content Area */}
           <div
             ref={chatContainerRef}
-            className="flex-1 overflow-y-auto px-4 sm:px-8 md:px-12 lg:px-16 pt-6 pb-40 space-y-8 scroll-smooth"
+            onScroll={handleChatScroll}
+            onTouchStart={(e) => {
+              touchStartYRef.current = e.touches[0].clientY;
+            }}
+            onTouchMove={(e) => {
+              const currentY = e.touches[0].clientY;
+              if (currentY > touchStartYRef.current + 8) {
+                // User pulled down to scroll up into previous messages
+                userScrolledUpRef.current = true;
+                setShowScrollBottomBtn(true);
+              }
+            }}
+            onWheel={(e) => {
+              if (e.deltaY < 0) {
+                userScrolledUpRef.current = true;
+                setShowScrollBottomBtn(true);
+              }
+            }}
+            className="flex-1 overflow-y-auto px-4 sm:px-8 md:px-12 lg:px-16 pt-6 pb-40 space-y-8"
           >
-            {/* Conversation Messages */}
-            {currentThread.messages.map((message) => {
+            {/* Conversation Messages or Welcome State */}
+            {(!currentThread || !currentThread.messages || currentThread.messages.length === 0) ? (
+              <div className="h-full min-h-[420px] flex flex-col items-center justify-center text-center px-4 max-w-xl mx-auto select-none">
+                <div className="w-16 h-16 rounded-3xl bg-[#0e0103] border-[1.5px] border-[#ff1828]/60 flex items-center justify-center text-[#ff1828] shadow-[0_0_30px_rgba(255,24,40,0.5),inset_0_0_15px_rgba(255,24,40,0.3)] mb-4">
+                  <Sparkles size={28} className="animate-pulse" />
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight mb-2 uppercase" style={{ fontFamily: "'Syne', sans-serif" }}>
+                  Think Creative AI
+                </h2>
+                <p className="text-xs sm:text-sm text-zinc-400 max-w-md leading-relaxed mb-4">
+                  {currentUser
+                    ? `Welcome back, ${currentUser.displayName || currentUser.email?.split('@')[0]}! Your real-time chats and visual references are automatically saved.`
+                    : 'Ask anything, explore high-performance design, or generate blueprints.'}
+                </p>
+              </div>
+            ) : (
+              currentThread.messages.map((message) => {
               if (message.sender === 'user') {
                 return (
                   <motion.div
@@ -3756,13 +4031,23 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                   className="w-full h-full object-cover"
                                 />
                               </div>
+                            ) : file.type?.startsWith('video/') ? (
+                              <div
+                                key={file.id}
+                                className="flex items-center gap-2 bg-zinc-900 border border-[#ff1828]/50 rounded-xl px-3 py-1.5 text-xs text-white shadow-md select-none shrink-0"
+                              >
+                                <div className="w-5 h-5 rounded-full bg-[#ff1828] flex items-center justify-center text-white shrink-0">
+                                  <div className="w-0 h-0 border-t-[3.5px] border-t-transparent border-b-[3.5px] border-b-transparent border-l-[6px] border-l-white ml-0.5" />
+                                </div>
+                                <span className="max-w-[140px] truncate font-semibold">{file.name}</span>
+                              </div>
                             ) : (
                               <div
                                 key={file.id}
                                 className="flex items-center gap-2 bg-white/10 border border-white/15 rounded-full px-3 py-1 text-xs text-white"
                               >
                                 <Paperclip size={12} className="text-zinc-300 rotate-[-45deg]" />
-                                <span className="max-w-[140px] truncate">{file.name}</span>
+                                <span className="max-w-[140px] truncate font-medium">{file.name}</span>
                               </div>
                             )
                           )}
@@ -3884,6 +4169,17 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                     </button>
                   )}
 
+                  {/* Question Mode Card IN CHAT (User: "gasa question Wala ma question ataha na wasa ka lankin wo prompt box ma ni chat ma show ho") */}
+                  {message.activeQuestion && (
+                    <div className="pt-1 pb-2">
+                      <InteractiveQuestionCard
+                        question={message.activeQuestion}
+                        disabled={isSendLocked || isAiTyping}
+                        onAnswer={(answer) => handleAnswerQuestionInChat(message.id, answer)}
+                      />
+                    </div>
+                  )}
+
                   {/* Loaded Answer Content with typing animation and tactile vibration */}
                   {message.text && (
                     <motion.div
@@ -3898,29 +4194,54 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                       className="space-y-6"
                       onClick={() => handleSkipTyping(message.id)}
                     >
-                      {/* While typing, display progressively with animated blinking cursor */}
+                      {/* While typing, display progressively with animated blinking cursor & immediate scrollable code box */}
                       {typingAnimationMsgId === message.id ? (
-                        <div className="text-zinc-100 text-base sm:text-lg leading-relaxed whitespace-pre-line font-bold cursor-pointer select-text">
-                          {renderFormattedBoldText(message.text)}
-                          <span className="inline-block w-2 h-4 ml-1.5 bg-white/90 animate-pulse align-middle rounded-sm" />
-                        </div>
+                        <LiveMessageStreamRenderer
+                          rawText={message.text}
+                          isStreaming={true}
+                          onOpenPreview={(html, fn) => setFullscreenWebsite({ html, fileName: fn || 'website.html' })}
+                          onOpenEditor={handleOpenEditor}
+                          onUseInChat={(p) => {
+                            setInputVal(p);
+                            showToast('Loaded prompt into input box');
+                          }}
+                        />
                       ) : (
                         <>
-                          {/* 3 to 4 topic-related visual images at top of valid response with lightbox & direct download */}
-                          <MessageTopImageGallery
-                            promptOrTopic={
-                              currentThread?.promptBanner ||
-                              (typeof message.structuredContent?.mainTitle === 'string'
-                                ? message.structuredContent.mainTitle
-                                : '') ||
-                              message.text.slice(0, 120)
-                            }
-                          />
+                          {/* 3 to 4 topic-related visual images ONLY for important/valid messages matching the reply */}
+                          {(() => {
+                            const prevUserMsg = (currentThread?.messages || [])
+                              .slice(0, (currentThread?.messages || []).findIndex((m) => m.id === message.id))
+                              .reverse()
+                              .find((m) => m.sender === 'user');
+                            const userPromptText = prevUserMsg?.text;
+                            const shouldShow = shouldShowReferenceImagesForMessage(
+                              message,
+                              currentThread?.promptBanner,
+                              userPromptText
+                            );
+                            if (!shouldShow) return null;
+
+                            const matchedQuery = extractImageSearchQueryFromMessage(
+                              message,
+                              currentThread?.promptBanner,
+                              userPromptText
+                            );
+
+                            return (
+                              <MessageTopImageGallery
+                                promptOrTopic={matchedQuery}
+                              />
+                            );
+                          })()}
 
                           {/* Clean White Main Title (slightly larger than sub-heading, all in pure white) */}
                           {message.structuredContent?.mainTitle && (
                             <div className="pt-1">
-                              <h2 className="text-2xl sm:text-[26px] md:text-3xl font-black tracking-tight text-white leading-tight">
+                              <h2
+                                className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-white leading-tight font-luxury-serif"
+                                style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 700 }}
+                              >
                                 {typeof message.structuredContent.mainTitle === 'string'
                                   ? message.structuredContent.mainTitle
                                   : `${(message.structuredContent.mainTitle as any).white || ''} ${(message.structuredContent.mainTitle as any).red || ''}`.trim()}
@@ -3930,14 +4251,24 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
                           {/* Plain text fallback when no structured headers yet */}
                           {!message.structuredContent && message.text.replace(/```question[\s\S]*?```/gi, '').trim() && (
-                            <div className="text-zinc-100 text-base sm:text-lg leading-relaxed whitespace-pre-line font-bold">
-                              {renderFormattedBoldText(message.text.replace(/```question[\s\S]*?```/gi, '').trim())}
-                            </div>
+                            <LiveMessageStreamRenderer
+                              rawText={message.text.replace(/```question[\s\S]*?```/gi, '').trim()}
+                              isStreaming={false}
+                              onOpenPreview={(html, fn) => setFullscreenWebsite({ html, fileName: fn || 'website.html' })}
+                              onOpenEditor={handleOpenEditor}
+                              onUseInChat={(p) => {
+                                setInputVal(p);
+                                showToast('Loaded prompt into input box');
+                              }}
+                            />
                           )}
 
                   {/* Intro Text */}
                   {message.structuredContent?.intro && (
-                    <div className="text-zinc-100 text-base sm:text-lg leading-relaxed max-w-4xl font-bold">
+                    <div
+                      className="text-white text-lg sm:text-xl md:text-[22px] leading-relaxed max-w-4xl font-bold font-luxury-serif tracking-[0.015em]"
+                      style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
+                    >
                       {renderFormattedBoldText(message.structuredContent.intro)}
                     </div>
                   )}
@@ -3948,14 +4279,20 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                       {/* Section Title with crimson accent pill */}
                       <div className="flex items-center gap-2.5">
                         <div className="w-1.5 h-5 bg-[#ff1828] rounded-full" />
-                        <h3 className="text-xl sm:text-2xl font-black text-white tracking-wide">
+                        <h3
+                          className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-wide font-luxury-serif"
+                          style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 800 }}
+                        >
                           {section.title}
                         </h3>
                       </div>
 
                       {/* Description above code/prompt */}
                       {section.description && (
-                        <div className="text-zinc-100 text-sm sm:text-base leading-relaxed whitespace-pre-line font-bold">
+                        <div
+                          className="text-white text-base sm:text-lg md:text-xl leading-relaxed whitespace-pre-line font-bold font-luxury-serif tracking-[0.012em]"
+                          style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
+                        >
                           {renderFormattedBoldText(section.description)}
                         </div>
                       )}
@@ -3964,9 +4301,13 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                       {section.bullets && (
                         <ul className="space-y-3 pt-1">
                           {section.bullets.map((bullet, bIdx) => (
-                            <li key={bIdx} className="flex items-start gap-3.5 text-sm sm:text-base text-zinc-100 font-bold group">
-                              <span className="w-2 h-2 rounded-full bg-[#ff1828] mt-2 shrink-0 group-hover:scale-125 transition-transform" />
-                              <span className="leading-relaxed text-zinc-100 font-bold">{renderFormattedBoldText(bullet)}</span>
+                            <li
+                              key={bIdx}
+                              className="flex items-start gap-3.5 text-base sm:text-lg md:text-xl text-white font-bold group font-luxury-serif tracking-[0.012em]"
+                              style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
+                            >
+                              <span className="w-2 h-2 rounded-full bg-[#ff1828] mt-2.5 shrink-0 group-hover:scale-125 transition-transform" />
+                              <span className="leading-relaxed text-white font-bold">{renderFormattedBoldText(bullet)}</span>
                             </li>
                           ))}
                         </ul>
@@ -3993,6 +4334,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                           fileName={section.fileName}
                           onOpenFullScreenPreview={(html, fileName) =>
                             setFullscreenWebsite({ html, fileName: fileName || 'website.html' })
+                          }
+                          onOpenFullScreenEditor={(code, fileName, language) =>
+                            handleOpenEditor(code, fileName, language)
                           }
                         />
                       )}
@@ -4196,13 +4540,33 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                   )}
                 </motion.div>
               );
-            })}
+            })
+          )}
           </div>
+
+          {/* Scroll to bottom button when user scrolled up */}
+          <AnimatePresence>
+            {showScrollBottomBtn && (
+              <motion.button
+                initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.9 }}
+                type="button"
+                onClick={() => scrollToBottom(true)}
+                className="absolute bottom-28 sm:bottom-28 right-6 sm:right-12 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-black/95 hover:bg-black text-white border border-zinc-700/80 hover:border-zinc-500 shadow-[0_12px_35px_rgba(0,0,0,0.95),0_0_1px_rgba(255,255,255,0.25)] text-xs font-bold tracking-wide backdrop-blur-xl transition-all cursor-pointer pointer-events-auto group active:scale-95"
+              >
+                <div className="w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center text-white shrink-0 group-hover:bg-zinc-800 transition-colors">
+                  <ArrowDown size={13} className="text-white group-hover:translate-y-0.5 transition-transform" />
+                </div>
+                <span className="text-white font-bold tracking-wide">Jump to Recent</span>
+              </motion.button>
+            )}
+          </AnimatePresence>
 
           {/* ------------------------------------------------------------- */}
           {/* BOTTOM FLOATING PROMPT BOX & INTERACTIVE EXPANDABLE MODULES */}
           {/* ------------------------------------------------------------- */}
-          <div className="absolute bottom-5 left-0 right-0 px-4 sm:px-8 md:px-12 lg:px-16 flex flex-col items-center pointer-events-none z-40">
+          <div className="absolute bottom-2 sm:bottom-5 left-0 right-0 px-2 sm:px-8 md:px-12 lg:px-16 flex flex-col items-center pointer-events-none z-40 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
             {/* Hidden File Input for Prompt Box & Modules */}
             <input
               ref={chatFileInputRef}
@@ -4218,19 +4582,15 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               className="hidden"
             />
 
-            {/* Dynamic width container: when process overview OR questioning is active */}
+            {/* Dynamic width container: when process overview is active */}
             {(() => {
-              const activePromptQuestion =
-                promptQuestionQueue.length > 0 && promptQuestionIdx < promptQuestionQueue.length
-                  ? promptQuestionQueue[promptQuestionIdx]
-                  : undefined;
+              const hasActiveQuestionInChat = currentThread?.messages?.some((m) => Boolean(m.activeQuestion));
+              const hideInputControls = isThinkingPanelOpen || hasActiveQuestionInChat;
 
               return (
                 <div
-                  className={`w-full transition-all duration-300 pointer-events-auto relative ${
-                    isThinkingPanelOpen || activePromptQuestion
-                      ? 'max-w-3xl sm:max-w-4xl'
-                      : 'max-w-3xl'
+                  className={`w-full transition-all duration-300 pointer-events-auto relative max-w-[96vw] sm:max-w-3xl ${
+                    isThinkingPanelOpen ? 'sm:max-w-4xl' : ''
                   }`}
                 >
                   <AnimatePresence mode="wait">
@@ -4241,16 +4601,6 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                         duration={activeThinkingMessage.thoughtDuration || 3}
                         message={activeThinkingMessage}
                         onClose={() => setIsThinkingPanelOpen(false)}
-                      />
-                    ) : activePromptQuestion ? (
-                      /* SMART QUESTION MODE INTERACTIVE CARD IN PROMPT BOX (Pure white, 3 options + 1 Custom) */
-                      <InteractiveQuestionCard
-                        key={`interactive-question-${activePromptQuestion.id || promptQuestionIdx}`}
-                        question={activePromptQuestion}
-                        stepNumber={promptQuestionIdx + 1}
-                        totalSteps={promptQuestionQueue.length}
-                        disabled={isSendLocked || isAiTyping}
-                        onAnswer={(answer) => handleAnswerPromptQuestion(answer)}
                       />
                     ) : isMicActive || isTranscribing ? (
                       /* LIVE STT SOUND BAR & TRANSCRIBING WAVEFORM matching Screenshots 1 & 2 */
@@ -4327,6 +4677,26 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                         <X size={11} strokeWidth={2.5} />
                                       </button>
                                     </div>
+                                  ) : file.type?.startsWith('video/') ? (
+                                    /* Video media pill with play indicator and remove button */
+                                    <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-300 text-white shadow-md rounded-full px-3.5 py-1.5 text-xs sm:text-sm font-semibold shrink-0 select-none">
+                                      <div className="w-5 h-5 rounded-full bg-[#ff1828] flex items-center justify-center text-white shrink-0">
+                                        <div className="w-0 h-0 border-t-[3.5px] border-t-transparent border-b-[3.5px] border-b-transparent border-l-[6px] border-l-white ml-0.5" />
+                                      </div>
+                                      <span className="max-w-[120px] sm:max-w-[160px] truncate" title={file.name}>
+                                        {file.name}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={isSendLocked || isAiTyping}
+                                        onClick={() => removeChatAttachment(file.id)}
+                                        className="w-4 h-4 rounded-full hover:bg-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                                        title={`Remove ${file.name}`}
+                                        aria-label={`Remove ${file.name}`}
+                                      >
+                                        <X size={11} strokeWidth={2.5} />
+                                      </button>
+                                    </div>
                                   ) : (
                                     /* Non-image files show standard pill */
                                     <div className="flex items-center gap-2 bg-zinc-100 border border-zinc-200/90 shadow-[0_2px_8px_rgba(0,0,0,0.06)] rounded-full px-3.5 py-1.5 text-xs sm:text-sm text-zinc-800 font-medium shrink-0 select-none">
@@ -4372,88 +4742,95 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                             )}
                           </AnimatePresence>
 
-                          {/* Bottom Row Controls */}
-                          <div className="flex items-center justify-between pt-1">
-                            {/* Left: Plus (+) and Microphone */}
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                disabled={isSendLocked || isAiTyping}
-                                onClick={() => chatFileInputRef.current?.click()}
-                                className="w-8 h-8 rounded-full hover:bg-zinc-100 text-zinc-700 flex items-center justify-center transition-all cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="Attach files (Max 10)"
-                                aria-label="Attach files (Max 10)"
-                              >
-                                <Plus size={20} strokeWidth={2} />
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={isSendLocked || isAiTyping}
-                                onClick={toggleMic}
-                                className="w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer active:scale-95 hover:bg-zinc-100 text-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                                title="Voice Input (STT with Live Animation)"
-                              >
-                                <Mic size={19} />
-                              </button>
-                            </div>
-
-                            {/* Right: Model Selector + Send Button */}
-                            <div className="flex items-center gap-2">
-                              {/* Model Dropdown */}
-                              <div className="relative">
+                          {/* Bottom Row Controls: Rule 11 - hide when Question Mode or Thinking Mode is active */}
+                          {!hideInputControls ? (
+                            <div className="flex items-center justify-between pt-1">
+                              {/* Left: Plus (+) and Microphone */}
+                              <div className="flex items-center gap-1.5">
                                 <button
                                   type="button"
                                   disabled={isSendLocked || isAiTyping}
-                                  onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs sm:text-sm font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  onClick={() => chatFileInputRef.current?.click()}
+                                  className="w-8 h-8 rounded-full hover:bg-zinc-100 text-zinc-700 flex items-center justify-center transition-all cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title="Attach files (Max 10)"
+                                  aria-label="Attach files (Max 10)"
                                 >
-                                  <span>{selectedModel}</span>
-                                  <ChevronDown size={14} className="text-zinc-500" />
+                                  <Plus size={20} strokeWidth={2} />
                                 </button>
 
-                                {isModelDropdownOpen && !isSendLocked && !isAiTyping && (
-                                  <div className="absolute bottom-10 right-0 w-36 bg-zinc-900 text-white rounded-xl shadow-xl border border-white/10 p-1 z-50 text-xs">
-                                    {['GPT-4o', 'GPT-4o mini', 'Gemini 2.5', 'Claude 3.7'].map((model) => (
-                                      <button
-                                        key={model}
-                                        type="button"
-                                        onClick={() => {
-                                          setSelectedModel(model);
-                                          setIsModelDropdownOpen(false);
-                                        }}
-                                        className={`w-full text-left px-3 py-1.5 rounded-lg transition-colors ${
-                                          selectedModel === model
-                                            ? 'bg-[#ff1828] text-white'
-                                            : 'hover:bg-white/10 text-zinc-300'
-                                        }`}
-                                      >
-                                        {model}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
+                                <button
+                                  type="button"
+                                  disabled={isSendLocked || isAiTyping}
+                                  onClick={toggleMic}
+                                  className="w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer active:scale-95 hover:bg-zinc-100 text-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title="Voice Input (STT with Live Animation)"
+                                >
+                                  <Mic size={19} />
+                                </button>
                               </div>
 
-                              {/* Red Circular Send Button - Locked immediately on send until completion */}
-                              <button
-                                type="submit"
-                                disabled={
-                                  isSendLocked ||
-                                  isAiTyping ||
-                                  (!inputVal.trim() && chatAttachments.length === 0)
-                                }
-                                className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
-                                  !isSendLocked && !isAiTyping && (inputVal.trim() || chatAttachments.length > 0)
-                                    ? 'bg-[#ff1828] text-white shadow-[0_0_18px_rgba(255,24,40,0.8)] hover:scale-105 cursor-pointer active:scale-95'
-                                    : 'bg-zinc-200 text-zinc-400 cursor-not-allowed opacity-60'
-                                }`}
-                                title={isSendLocked || isAiTyping ? 'Generating response...' : 'Send prompt'}
-                              >
-                                <Send size={16} className="ml-0.5" />
-                              </button>
+                              {/* Right: Model Selector + Send Button */}
+                              <div className="flex items-center gap-2">
+                                {/* Model Dropdown */}
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    disabled={isSendLocked || isAiTyping}
+                                    onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs sm:text-sm font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  >
+                                    <span>{selectedModel === 'Gemini 2.5' ? 'AI Studio 2.5' : selectedModel}</span>
+                                    <ChevronDown size={14} className="text-zinc-500" />
+                                  </button>
+
+                                  {isModelDropdownOpen && !isSendLocked && !isAiTyping && (
+                                    <div className="absolute bottom-10 right-0 w-36 bg-zinc-900 text-white rounded-xl shadow-xl border border-white/10 p-1 z-50 text-xs">
+                                      {['GPT-4o', 'GPT-4o mini', 'AI Studio 2.5', 'Claude 3.7'].map((model) => (
+                                        <button
+                                          key={model}
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedModel(model);
+                                            setIsModelDropdownOpen(false);
+                                          }}
+                                          className={`w-full text-left px-3 py-1.5 rounded-lg transition-colors ${
+                                            selectedModel === model
+                                              ? 'bg-[#ff1828] text-white'
+                                              : 'hover:bg-white/10 text-zinc-300'
+                                          }`}
+                                        >
+                                          {model}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Red Circular Send Button - Locked immediately on send until completion */}
+                                <button
+                                  type="submit"
+                                  disabled={
+                                    isSendLocked ||
+                                    isAiTyping ||
+                                    (!inputVal.trim() && chatAttachments.length === 0)
+                                  }
+                                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+                                    !isSendLocked && !isAiTyping && (inputVal.trim() || chatAttachments.length > 0)
+                                      ? 'bg-[#ff1828] text-white shadow-[0_0_18px_rgba(255,24,40,0.8)] hover:scale-105 cursor-pointer active:scale-95'
+                                      : 'bg-zinc-200 text-zinc-400 cursor-not-allowed opacity-60'
+                                  }`}
+                                  title={isSendLocked || isAiTyping ? 'Generating response...' : 'Send prompt'}
+                                >
+                                  <Send size={16} className="ml-0.5" />
+                                </button>
+                              </div>
                             </div>
-                          </div>
+                          ) : (
+                            <div className="flex items-center justify-between pt-1 px-1 text-[11px] text-zinc-400 font-medium">
+                              <span>Discovery question active above</span>
+                              <span className="text-zinc-500">Select an option to proceed</span>
+                            </div>
+                          )}
                         </div>
                       </form>
                     )}
@@ -4486,6 +4863,24 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             onClose={() => setFullscreenWebsite(null)}
             htmlContent={fullscreenWebsite.html}
             fileName={fullscreenWebsite.fileName}
+          />
+        )}
+
+        {/* Fullscreen In-App Code Editor with Live Editing per user request */}
+        {fullscreenEditor && (
+          <FullScreenCodeEditorModal
+            isOpen={Boolean(fullscreenEditor)}
+            onClose={() => setFullscreenEditor(null)}
+            initialCode={fullscreenEditor.code}
+            fileName={fullscreenEditor.fileName}
+            language={fullscreenEditor.language}
+            onSave={(updatedCode) => {
+              setFullscreenEditor((prev) => prev ? { ...prev, code: updatedCode } : null);
+              showToast('Code saved successfully');
+            }}
+            onOpenInBrowser={(code) => {
+              openHtmlPreviewInBrowser(code, fullscreenEditor.fileName);
+            }}
           />
         )}
 

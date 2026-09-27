@@ -15,9 +15,18 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
-    // Chat threads & persistent messages
+    // User-scoped chats: users/{userId}/chats/{chatId}
+    match /users/{userId}/chats/{chatId} {
+      allow read, write: if isOwner(userId);
+      match /messages/{messageId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Chat threads & persistent messages: strictly owned by authenticated user UID
     match /chatThreads/{threadId} {
-      allow read, write: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isOwner(resource.data.userId));
       
       match /messages/{messageId} {
         allow read, write: if isAuthenticated();
@@ -26,15 +35,16 @@ service cloud.firestore {
 
     // Project memory drawer & blueprints
     match /projectMemories/{memoryId} {
-      allow read, write: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
     }
 
-    // Discovery questions & design sessions
+    // Discovery sessions
     match /discoverySessions/{sessionId} {
       allow read, write: if isAuthenticated();
     }
 
-    // Client bookings & consultation appointments
+    // Client bookings
     match /bookings/{bookingId} {
       allow create: if true;
       allow read, update, delete: if isAuthenticated();
