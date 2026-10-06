@@ -626,6 +626,13 @@ class MemoryManager {
         reasons.push('Semantic topic correlation (Creative Studio)');
       }
 
+      // Semantic master website reference correlation
+      if ((queryLower.includes('think creative') || queryLower.includes('master website') || queryLower.includes('design reference') || queryLower.includes('neumorphic')) &&
+          (pName.includes('think creative') || pTags.includes('master-reference'))) {
+        projectScore += 60;
+        reasons.push('Semantic topic correlation (Master Website Design Reference)');
+      }
+
       // Search through artifacts
       for (const artifact of project.artifacts) {
         let artScore = projectScore;

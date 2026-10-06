@@ -145,6 +145,10 @@ export async function logOut(): Promise<void> {
     await signOut(auth);
     currentUser = null;
     localStorage.removeItem('think_creative_user');
+    localStorage.removeItem('think_creative_guest_threads');
+    localStorage.removeItem('think_creative_projects');
+    localStorage.removeItem('gemini_project_memory_v2');
+    localStorage.removeItem('gemini_active_project_id_v2');
   } catch (err) {
     console.warn('Sign out error:', err);
   }
@@ -187,14 +191,14 @@ export async function saveBookingToFirestore(data: {
 }
 
 /**
- * Persist or update project memory in Firestore
+ * Persist or update project memory in Firestore strictly under users/{uid}/projects/{projectId}
  */
 export async function syncProjectMemoryToFirestore(project: any): Promise<boolean> {
   try {
     const user = await ensureAuth();
     if (!user || !project.id) return false;
 
-    const docRef = doc(db, 'projectMemories', project.id);
+    const docRef = doc(db, 'users', user.uid, 'projects', project.id);
     await setDoc(
       docRef,
       {
@@ -212,7 +216,7 @@ export async function syncProjectMemoryToFirestore(project: any): Promise<boolea
 }
 
 /**
- * Persist real-time chat thread with full messages to Firestore for logged-in user
+ * Persist real-time chat thread strictly under users/{uid}/chats/{threadId}
  */
 export async function syncChatThreadToFirestore(thread: any, explicitUserId?: string): Promise<boolean> {
   try {
@@ -233,7 +237,7 @@ export async function syncChatThreadToFirestore(thread: any, explicitUserId?: st
         }))
       : [];
 
-    const docRef = doc(db, 'chatThreads', thread.id);
+    const docRef = doc(db, 'users', user.uid, 'chats', thread.id);
     await setDoc(
       docRef,
       {
@@ -257,8 +261,8 @@ export async function syncChatThreadToFirestore(thread: any, explicitUserId?: st
 }
 
 /**
- * Subscribe to real-time chat threads from Firestore for the logged-in user.
- * If user is not logged in, emits an empty list.
+ * Subscribe to real-time chat threads directly under users/{userId}/chats
+ * NEVER perform a global query.
  */
 export function subscribeToUserChatThreads(
   userId: string | null | undefined,
@@ -271,8 +275,7 @@ export function subscribeToUserChatThreads(
 
   try {
     const q = query(
-      collection(db, 'chatThreads'),
-      where('userId', '==', userId),
+      collection(db, 'users', userId, 'chats'),
       orderBy('lastUpdated', 'desc')
     );
 
@@ -283,13 +286,17 @@ export function subscribeToUserChatThreads(
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data();
           const topicKey = data.title || data.id || docSnap.id;
-          threads[topicKey] = {
+          const threadObj = {
             id: data.id || docSnap.id,
             title: data.title || topicKey,
             promptBanner: data.promptBanner || '',
             activeTab: data.activeTab || 'prompt',
             messages: Array.isArray(data.messages) ? data.messages : [],
           };
+          threads[topicKey] = threadObj;
+          if (data.id && data.id !== topicKey) {
+            threads[data.id] = threadObj;
+          }
         });
         onUpdate(threads);
       },
@@ -297,22 +304,23 @@ export function subscribeToUserChatThreads(
         console.warn('Real-time chat threads listener notice:', err);
         // Fallback without orderBy if index is still propagating
         try {
-          const fallbackQ = query(
-            collection(db, 'chatThreads'),
-            where('userId', '==', userId)
-          );
+          const fallbackQ = query(collection(db, 'users', userId, 'chats'));
           return onSnapshot(fallbackQ, (snapshot) => {
             const threads: Record<string, any> = {};
             snapshot.docs.forEach((docSnap) => {
               const data = docSnap.data();
               const topicKey = data.title || data.id || docSnap.id;
-              threads[topicKey] = {
+              const threadObj = {
                 id: data.id || docSnap.id,
                 title: data.title || topicKey,
                 promptBanner: data.promptBanner || '',
                 activeTab: data.activeTab || 'prompt',
                 messages: Array.isArray(data.messages) ? data.messages : [],
               };
+              threads[topicKey] = threadObj;
+              if (data.id && data.id !== topicKey) {
+                threads[data.id] = threadObj;
+              }
             });
             onUpdate(threads);
           });
@@ -328,11 +336,13 @@ export function subscribeToUserChatThreads(
 }
 
 /**
- * Delete a specific chat thread from Firestore
+ * Delete a specific chat thread from Firestore under users/{uid}/chats/{threadId}
  */
-export async function deleteChatThreadFromFirestore(threadId: string): Promise<boolean> {
+export async function deleteChatThreadFromFirestore(threadId: string, explicitUserId?: string): Promise<boolean> {
   try {
-    const docRef = doc(db, 'chatThreads', threadId);
+    const user = explicitUserId ? { uid: explicitUserId } : await ensureAuth();
+    if (!user || !user.uid) return false;
+    const docRef = doc(db, 'users', user.uid, 'chats', threadId);
     await deleteDoc(docRef);
     return true;
   } catch (err) {

@@ -51,15 +51,35 @@ import {
   Lock,
   LogOut,
   ArrowDown,
+  ExternalLink,
+  Sliders,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTheme } from '../context/ThemeContext';
+import { ThemeToggle } from './ThemeToggle';
 import { AttachedFile, QuestionBlock, ProjectMemory, MemoryContextPackage } from '../types';
 import { WebsitePreviewModal } from './WebsitePreviewModal';
 import { FullScreenCodeEditorModal } from './FullScreenCodeEditorModal';
 import { ProjectMemoryDrawer } from './ProjectMemoryDrawer';
 import { TimetableImageCard, TimetableSlot } from './TimetableImageCard';
 import { MessageTopImageGallery } from './MessageTopImageGallery';
+import { ClarificationQuestionsCard } from './ClarificationQuestionsCard';
+import { LoginModal } from './LoginModal';
+import {
+  isUserExplicitImageRequest,
+  ImagePlannerResult,
+} from '../utils/imagePlanner';
+import {
+  ClarificationDecision,
+  ClarificationQuestion,
+  isSkipIntent,
+  buildEnrichedTaskPrompt,
+  parseAndValidateGateResponse,
+} from '../utils/clarificationGate';
 import { memoryManager } from '../utils/memoryManager';
+import { INITIAL_CHAT_DATA } from '../data/initialChats';
 import {
   subscribeToAuth,
   subscribeToUserChatThreads,
@@ -107,108 +127,6 @@ export function isSimpleMessage(text?: string): boolean {
  *   2. The message is discussing a concrete visual subject (e.g. cars/automotive, sports/athletes, celebrities/personalities, places/cities, tech devices/gadgets, animals/nature, designs/architecture, timetables/workouts)
  *   3. Substantial structured explanation (has structuredContent with mainTitle or multiple sections)
  */
-export function shouldShowReferenceImagesForMessage(
-  message: any,
-  promptBanner?: string,
-  userPromptText?: string
-): boolean {
-  if (!message || !message.text) return false;
-
-  const rawText = message.text.replace(/```question[\s\S]*?```/gi, '').trim();
-  const lowerText = rawText.toLowerCase();
-  const lowerPrompt = (userPromptText || promptBanner || '').toLowerCase();
-
-  // 1. Never show images on simple greetings or conversational pleasantries
-  const isGreeting = /^(hi|hello|hey|salam|assalam|hola|good\s*(morning|afternoon|evening)|howdy|welcome)\b/i.test(lowerText);
-  if (isGreeting && rawText.length < 200 && !message.structuredContent?.mainTitle) {
-    return false;
-  }
-
-  // 2. Never show images on short conversational replies or acknowledgments
-  const isShortChitChat = /^(ok|okay|sure|thanks|thank\s*you|yes|no|got\s*it|understood|i\s*can\s*help|how\s*can\s*i\s*help)\b/i.test(lowerText);
-  if (isShortChitChat && rawText.length < 160) {
-    return false;
-  }
-
-  // 3. Never show images on clarification or active question prompt
-  if (message.activeQuestion || rawText.includes('```question')) {
-    return false;
-  }
-
-  // 4. Positive Trigger: User explicitly asked for image/picture/photo/visual
-  const isExplicitVisualRequest =
-    /(image|photo|picture|pic|wallpaper|reference|look\s*like|visual|dikhao|tasveer|banao|show\s*me|photograph|render)/i.test(lowerPrompt) ||
-    /(image|photo|picture|wallpaper|reference)/i.test(lowerText.slice(0, 80));
-  if (isExplicitVisualRequest) {
-    return true;
-  }
-
-  // 5. Positive Trigger: Concrete visual topic with real entity
-  const hasVisualEntity =
-    /(car|bmw|ferrari|mercedes|audi|porsche|lamborghini|supercar|vehicle|cricket|football|ronaldo|messi|babar|actor|celebrity|destination|place|travel|city|architecture|building|interior|device|phone|iphone|laptop|robot|animal|wildlife|tiger|lion|watch|fashion|luxury|workout|gym|timetable|fitness|landing\s*page|ui\s*design)/i.test(lowerPrompt) ||
-    /(car|bmw|ferrari|mercedes|audi|porsche|lamborghini|supercar|vehicle|cricket|ronaldo|messi|babar|celebrity|destination|travel|city|architecture|iphone|robot|animal|tiger|lion|luxury|workout|gym|timetable|fitness)/i.test(lowerText.slice(0, 150));
-
-  if (hasVisualEntity && rawText.length > 80) {
-    return true;
-  }
-
-  // 6. Positive Trigger: Substantive structured content with dedicated mainTitle
-  if (message.structuredContent?.mainTitle && rawText.length > 250) {
-    const titleStr = typeof message.structuredContent.mainTitle === 'string'
-      ? message.structuredContent.mainTitle
-      : `${(message.structuredContent.mainTitle as any).white || ''} ${(message.structuredContent.mainTitle as any).red || ''}`;
-    if (!/^(welcome|hello|hi|greeting)/i.test(titleStr.trim())) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Extracts the exact topic/search query that matches the actual reply message given.
- * Matches: "Jo massage go replacly Daya ha us sa match ker or usa ka Sath da go massage walilad ha ha"
- */
-export function extractImageSearchQueryFromMessage(
-  message: any,
-  promptBanner?: string,
-  userPromptText?: string
-): string {
-  // 1. If structuredContent has a clean mainTitle, use it (it reflects the exact subject answered)
-  if (message?.structuredContent?.mainTitle) {
-    const rawTitle = typeof message.structuredContent.mainTitle === 'string'
-      ? message.structuredContent.mainTitle
-      : `${(message.structuredContent.mainTitle as any).white || ''} ${(message.structuredContent.mainTitle as any).red || ''}`;
-    const cleanTitle = rawTitle.replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (cleanTitle.length > 2 && cleanTitle.length < 80) {
-      return cleanTitle;
-    }
-  }
-
-  // 2. Check user prompt for concrete entity or subject
-  if (userPromptText) {
-    const cleanedPrompt = userPromptText
-      .replace(/^(show|give|find|search|get|display|me|a|an|the|pictures?|photos?|images?|references?|of|about)\s+/gi, '')
-      .replace(/\b(please|karo|kero|dikhao|dena|chahiye|hai|batao)\b/gi, '')
-      .trim();
-    if (cleanedPrompt.length > 2 && cleanedPrompt.length < 60) {
-      return cleanedPrompt;
-    }
-  }
-
-  // 3. Fallback to promptBanner
-  if (promptBanner) {
-    const cleanBanner = promptBanner.replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (cleanBanner.length > 2 && cleanBanner.length < 80) {
-      return cleanBanner;
-    }
-  }
-
-  // 4. Extract first line or entity from message text
-  const firstLine = (message?.text || '').split('\n')[0].replace(/[#*`_]/g, '').trim();
-  return firstLine.slice(0, 60) || 'Visual Reference';
-}
-
 export function extractTimetableData(text: string): { title: string; slots: TimetableSlot[] } | null {
   if (!text) return null;
 
@@ -340,6 +258,27 @@ export interface ChatMessage {
     question?: QuestionBlock;
   };
   activeQuestion?: QuestionBlock;
+  clarificationDecision?: ClarificationDecision;
+  imagePlan?: {
+    mode: 'NONE' | 'AUTO_REFERENCE' | 'USER_REQUESTED';
+    shortReplyText?: string;
+    subjects: Array<{
+      label: string;
+      images: Array<{
+        id: string;
+        url: string;
+        thumbnail?: string;
+        alt: string;
+        title?: string;
+        sourceUrl?: string;
+        sourceDomain?: string;
+        width?: number;
+        height?: number;
+      }>;
+      backupPool?: any[];
+      googleSearchUrl?: string;
+    }>;
+  };
 }
 
 export interface ChatThread {
@@ -669,9 +608,6 @@ export function extractQuestionBlock(raw: string): QuestionBlock | null {
   return null;
 }
 
-// Without user login, no mock chats or past data are shown.
-const INITIAL_CHAT_DATA: Record<string, ChatThread> = {};
-
 /**
  * Universal browser file download helper for multi-format export
  */
@@ -693,6 +629,7 @@ interface SpecialSnippetBoxProps {
   content: string;
   language?: string;
   fileName?: string;
+  isStreaming?: boolean;
   onUseInChat?: (text: string) => void;
   onOpenFullScreenPreview?: (html: string, fileName?: string) => void;
   onOpenFullScreenEditor?: (code: string, fileName?: string, language?: string) => void;
@@ -758,36 +695,121 @@ export const downloadCodeFile = (filename: string, content: string) => {
   }
 };
 
-// Formatted text helper to render AI responses in bold luxury serif font styling (Cormorant Garamond / Bodoni / Playfair)
+// Formatted text helper to render AI responses in bold luxury serif font styling with interactive callouts and link cards
 export const renderFormattedBoldText = (text: string) => {
   if (!text) return null;
-  const parts = text.split(/(\*\*[^*]+\*\*|__[^_]+__)/g);
-  return parts.map((part, index) => {
-    if (
-      (part.startsWith('**') && part.endsWith('**')) ||
-      (part.startsWith('__') && part.endsWith('__'))
-    ) {
-      const boldContent = part.slice(2, -2);
-      return (
-        <strong
-          key={index}
-          className="font-black text-white tracking-[0.02em] font-luxury-serif"
-          style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 850 }}
+
+  // Detect dedicated visual callout cards (IMPORTANT, NOTE, TIP, WARNING, SUCCESS, ERROR)
+  const calloutRegex = /^(IMPORTANT|NOTE|TIP|WARNING|SUCCESS|ERROR|KEY POINT|REMEMBER)[:\s]+([\s\S]+)$/i;
+  const lines = text.split('\n');
+  const renderedElements: React.ReactNode[] = [];
+
+  for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+    const line = lines[lIdx];
+    const calloutMatch = line.trim().match(calloutRegex);
+    if (calloutMatch) {
+      const type = calloutMatch[1].toUpperCase();
+      const content = calloutMatch[2];
+      const isWarn = type === 'WARNING' || type === 'ERROR';
+      const isTip = type === 'TIP' || type === 'SUCCESS';
+      renderedElements.push(
+        <div
+          key={`callout-${lIdx}`}
+          className={`my-3 px-4 py-3 rounded-2xl border flex items-start gap-3 backdrop-blur-md ${
+            isWarn
+              ? 'bg-rose-950/40 border-rose-600/50 text-rose-200'
+              : isTip
+              ? 'bg-emerald-950/40 border-emerald-600/50 text-emerald-200'
+              : 'bg-zinc-900/80 border-[#00a6ff]/40 text-white'
+          }`}
         >
-          {boldContent}
-        </strong>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-white/10 shrink-0 mt-0.5">
+            {type}
+          </span>
+          <span className="font-bold text-sm sm:text-base leading-relaxed font-luxury-serif">
+            {content}
+          </span>
+        </div>
       );
+      continue;
     }
-    return (
-      <span
-        key={index}
-        className="font-bold text-white tracking-[0.015em] font-luxury-serif"
-        style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
-      >
-        {part}
-      </span>
+
+    // Process line for markdown links [Title](url) and raw URLs
+    const parts = line.split(/(\*\*[^*]+\*\*|__[^_]+__|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<]+)/g);
+    const lineElements = parts.map((part, index) => {
+      if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
+        const boldContent = part.slice(2, -2);
+        return (
+          <strong
+            key={`bold-${lIdx}-${index}`}
+            className="font-black text-white tracking-[0.02em] font-luxury-serif"
+            style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 850 }}
+          >
+            {boldContent}
+          </strong>
+        );
+      }
+
+      // Markdown link [Title](url)
+      const mdLinkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+      if (mdLinkMatch) {
+        const linkTitle = mdLinkMatch[1];
+        const linkUrl = mdLinkMatch[2];
+        let domain = 'link';
+        try { domain = new URL(linkUrl).hostname.replace(/^www\./, ''); } catch {}
+        return (
+          <a
+            key={`link-${lIdx}-${index}`}
+            href={linkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1 my-0.5 rounded-lg bg-white/10 hover:bg-white/20 text-[#ff4f78] hover:text-white border border-white/15 transition-all text-xs sm:text-sm font-bold active:scale-95 no-underline"
+          >
+            <span>{linkTitle}</span>
+            <span className="text-[10px] text-zinc-400">({domain})</span>
+            <ExternalLink size={12} className="shrink-0" />
+          </a>
+        );
+      }
+
+      // Raw URL
+      if (/^https?:\/\/[^\s<]+$/.test(part)) {
+        let domain = 'link';
+        try { domain = new URL(part).hostname.replace(/^www\./, ''); } catch {}
+        return (
+          <a
+            key={`rawlink-${lIdx}-${index}`}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1 my-0.5 rounded-lg bg-white/10 hover:bg-white/20 text-[#ff4f78] hover:text-white border border-white/15 transition-all text-xs sm:text-sm font-bold active:scale-95 no-underline"
+          >
+            <span>{domain}</span>
+            <ExternalLink size={12} className="shrink-0" />
+          </a>
+        );
+      }
+
+      return (
+        <span
+          key={`span-${lIdx}-${index}`}
+          className="font-bold text-white tracking-[0.015em] font-luxury-serif"
+          style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
+        >
+          {part}
+        </span>
+      );
+    });
+
+    renderedElements.push(
+      <React.Fragment key={`line-${lIdx}`}>
+        {lineElements}
+        {lIdx < lines.length - 1 && '\n'}
+      </React.Fragment>
     );
-  });
+  }
+
+  return renderedElements;
 };
 
 // Helper to generate a live HTML sandbox document from raw HTML/code
@@ -866,13 +888,20 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
   content,
   language,
   fileName,
+  isStreaming = false,
   onUseInChat,
   onOpenFullScreenPreview,
   onOpenFullScreenEditor,
 }) => {
   const [copied, setCopied] = useState(false);
-  // Default to white background for code per user preference: "show White background every kind of code"
-  const [codeTheme, setCodeTheme] = useState<'white' | 'dark'>('white');
+  const codeContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll code container as code/prompt is typed in live
+  useEffect(() => {
+    if (isStreaming && codeContainerRef.current) {
+      codeContainerRef.current.scrollTop = codeContainerRef.current.scrollHeight;
+    }
+  }, [content, isStreaming]);
 
   const isPrompt = type === 'prompt';
 
@@ -887,9 +916,9 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
       /<(div|section|header|footer|nav|main|aside|article|button|table|form|card|span|p|h[1-6]|svg)[\s>]/i.test(content)
     );
 
-  // Ensure HTML code strictly starts from <!DOCTYPE html> and ends with </html>
+  // When NOT streaming, ensure HTML code strictly starts from <!DOCTYPE html> and ends with </html> for complete copy/export
   let completeContent = content;
-  if (isHtmlCode) {
+  if (!isStreaming && isHtmlCode) {
     if (!/<!DOCTYPE\s+html/i.test(completeContent)) {
       if (/<html[\s>]/i.test(completeContent)) {
         completeContent = '<!DOCTYPE html>\n' + completeContent.trim();
@@ -934,20 +963,38 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
     downloadCodeFile(resolvedFileName, completeContent);
   };
 
-  const lineCount = completeContent.split('\n').length;
+  const lineCount = (completeContent || '').split('\n').length;
 
   return (
-    <div className="mt-4 rounded-[24px] sm:rounded-[28px] bg-white border border-zinc-200 shadow-[0_20px_50px_rgba(0,0,0,0.2),0_0_35px_rgba(255,24,40,0.06)] overflow-hidden transition-all text-zinc-900">
+    <motion.div
+      initial={{ opacity: 0, scale: 0.97, y: 12 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      className={`mt-4 rounded-[24px] sm:rounded-[28px] bg-white border border-zinc-200 shadow-[0_20px_50px_rgba(0,0,0,0.2),0_0_35px_rgba(0, 166, 255,0.06)] overflow-hidden transition-all text-zinc-900 ${
+        isStreaming ? 'ring-2 ring-[#00a6ff]/40 shadow-[0_0_25px_rgba(0, 166, 255,0.2)]' : ''
+      }`}
+    >
       {/* Top Header Bar (Pure White Container matching Question card) */}
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 bg-white border-b border-zinc-200">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ff1828] shadow-[0_0_8px_#ff1828]" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#00a6ff] shadow-[0_0_8px_#00a6ff]" />
           <span className="font-mono text-xs sm:text-sm font-bold text-zinc-900 tracking-wide truncate">
             {resolvedFileName}
           </span>
-          <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded-full shrink-0">
-            {lineCount} lines • Scrollable
-          </span>
+          {isStreaming ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/25 text-[#00a6ff] text-[11px] font-bold shrink-0 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00a6ff] animate-ping" />
+              <span>
+                {!completeContent.trim()
+                  ? 'Generating code...'
+                  : `Writing ${isPrompt ? 'Prompt' : language?.toUpperCase() || 'Code'}...`}
+              </span>
+            </span>
+          ) : (
+            <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded-full shrink-0">
+              {lineCount} lines • Scrollable
+            </span>
+          )}
         </div>
 
         {/* Action Controls: 4 clean icon options (Wide Screen, Copy, Preview, Save) */}
@@ -962,7 +1009,7 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
                 onOpenFullScreenPreview(completeContent, resolvedFileName);
               }
             }}
-            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 hover:text-[#ff1828] text-zinc-700 flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
+            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 hover:text-[#00a6ff] text-zinc-700 flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
             title="Expand Full Screen Code Editor"
             aria-label="Expand Full Screen Code Editor"
           >
@@ -978,22 +1025,26 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
             aria-label="Copy Code"
           >
             {copied ? (
-              <CheckCircle2 size={15} className="text-[#ff1828]" />
+              <CheckCircle2 size={15} className="text-[#00a6ff]" />
             ) : (
               <Copy size={15} />
             )}
           </button>
 
-          {/* 3. HTML Preview: Opens directly in Google / Browser tab on localhost! App me preview na chale */}
+          {/* 3. HTML Live Preview in App */}
           {isHtmlCode && (
             <button
               type="button"
               onClick={() => {
-                openHtmlPreviewInBrowser(completeContent, resolvedFileName);
+                if (onOpenFullScreenPreview) {
+                  onOpenFullScreenPreview(completeContent, resolvedFileName);
+                } else {
+                  openHtmlPreviewInBrowser(completeContent, resolvedFileName);
+                }
               }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border shadow-sm bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#ff1828] border-zinc-200"
-              title="Open Preview in Browser (Localhost)"
-              aria-label="Open Preview in Browser (Localhost)"
+              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border shadow-sm bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#00a6ff] border-zinc-200"
+              title="Open Live Preview in App"
+              aria-label="Open Live Preview in App"
             >
               <Eye size={15} />
             </button>
@@ -1003,7 +1054,7 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
           <button
             type="button"
             onClick={handleDownload}
-            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#ff1828] flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
+            className="w-8 h-8 rounded-lg bg-white hover:bg-zinc-50 text-zinc-700 hover:text-[#00a6ff] flex items-center justify-center transition-all cursor-pointer select-none active:scale-90 border border-zinc-200 shadow-sm"
             title="Download Complete File"
             aria-label="Download Complete File"
           >
@@ -1016,44 +1067,50 @@ export const SpecialSnippetBox: React.FC<SpecialSnippetBoxProps> = ({
       <div className="p-3 sm:p-4 bg-white">
         {/* COMPACT SCROLLABLE CODE BOX: Pure White Background */}
         <div className="rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-sm overflow-hidden">
-            {/* Scrollable Code Area (compact height, complete detail inside with line numbers) */}
-            <div className="max-h-64 sm:max-h-72 overflow-y-auto overflow-x-auto p-3.5 select-text bg-white">
-              <div className="flex font-mono text-xs sm:text-[13px] leading-relaxed">
-                {/* Line Numbers Column */}
-                {!isPrompt && (
-                  <div
-                    className="select-none pr-3 mr-3 text-right border-r border-zinc-200 text-zinc-400 font-mono font-medium bg-white"
-                    style={{ minWidth: '2.4rem' }}
-                  >
-                    {completeContent.split('\n').map((_, idx) => (
-                      <div key={idx} className="leading-relaxed">
-                        {idx + 1}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {/* Complete Code Content in Pure White Container */}
-                <pre className="flex-1 font-mono text-xs sm:text-[13px] leading-relaxed whitespace-pre font-bold text-zinc-950 bg-white selection:bg-[#ff1828]/20">
-                  {completeContent}
-                </pre>
-              </div>
-            </div>
-
-            {isPrompt && onUseInChat && (
-              <div className="flex justify-end p-2.5 border-t border-zinc-200 bg-zinc-50">
-                <button
-                  type="button"
-                  onClick={() => onUseInChat(content)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-semibold shadow-[0_0_12px_rgba(255,24,40,0.5)] transition-all cursor-pointer"
+          {/* Scrollable Code Area (compact height, complete detail inside with line numbers) */}
+          <div
+            ref={codeContainerRef}
+            className="max-h-64 sm:max-h-72 overflow-y-auto overflow-x-auto p-3.5 select-text bg-white scroll-smooth"
+          >
+            <div className="flex font-mono text-xs sm:text-[13px] leading-relaxed">
+              {/* Line Numbers Column */}
+              {!isPrompt && (
+                <div
+                  className="select-none pr-3 mr-3 text-right border-r border-zinc-200 text-zinc-400 font-mono font-medium bg-white"
+                  style={{ minWidth: '2.4rem' }}
                 >
-                  <Send size={12} />
-                  <span>Run In Prompt Box</span>
-                </button>
-              </div>
-            )}
+                  {(completeContent || ' ').split('\n').map((_, idx) => (
+                    <div key={idx} className="leading-relaxed">
+                      {idx + 1}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Complete Code Content in Pure White Container */}
+              <pre className="flex-1 font-mono text-xs sm:text-[13px] leading-relaxed whitespace-pre font-bold text-zinc-950 bg-white selection:bg-[#00a6ff]/20">
+                {completeContent || (isStreaming ? ' ' : '')}
+                {isStreaming && (
+                  <span className="inline-block w-2 h-4 bg-[#00a6ff] align-middle ml-1 rounded-[1px] animate-pulse shadow-[0_0_8px_#00a6ff]" />
+                )}
+              </pre>
+            </div>
           </div>
+
+          {isPrompt && onUseInChat && (
+            <div className="flex justify-end p-2.5 border-t border-zinc-200 bg-zinc-50">
+              <button
+                type="button"
+                onClick={() => onUseInChat(content)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00a6ff] hover:bg-[#0094e6] text-white text-xs font-semibold shadow-[0_0_12px_rgba(0, 166, 255,0.5)] transition-all cursor-pointer"
+              >
+                <Send size={12} />
+                <span>Run In Prompt Box</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
@@ -1074,9 +1131,9 @@ export const LiveMessageStreamRenderer: React.FC<{
 }> = ({ rawText, isStreaming = false, onOpenPreview, onOpenEditor, onUseInChat }) => {
   if (!rawText) return null;
 
-  // Split on code fences: ```[lang] [filename]?\n[code]```
-  const fenceRegex = /```([a-zA-Z0-9_-]+)?(?::([^\n]+))?\n([\s\S]*?)(?:```|$)/g;
-  const segments: { type: 'text' | 'code'; content: string; language?: string; fileName?: string }[] = [];
+  // Robust regex for code fences: ```[lang] [attributes]\n[code...] (```|$ )
+  const fenceRegex = /```([a-zA-Z0-9_.-]+)?([^\n]*)\n([\s\S]*?)(?:```|$)/g;
+  const segments: { type: 'text' | 'code' | 'prompt'; content: string; language?: string; fileName?: string }[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -1085,33 +1142,76 @@ export const LiveMessageStreamRenderer: React.FC<{
     if (textBefore.trim()) {
       segments.push({ type: 'text', content: textBefore });
     }
-    const lang = match[1] || '';
-    const fn = match[2];
+    const rawLang = (match[1] || '').toLowerCase();
+    const restHeader = match[2] || '';
     const code = match[3] || '';
+
+    let fileName = '';
+    const fnMatch =
+      restHeader.match(/(?:filename|file)=["']?([^"'\s]+)["']?/i) ||
+      restHeader.match(/:([^\s\n]+)/);
+    if (fnMatch) {
+      fileName = fnMatch[1];
+    }
+
+    const isPrompt = Boolean(rawLang && (rawLang.includes('prompt') || rawLang === 'llm'));
     segments.push({
-      type: 'code',
+      type: isPrompt ? 'prompt' : 'code',
       content: code,
-      language: lang,
-      fileName: fn,
+      language: rawLang || (isPrompt ? 'prompt' : 'html'),
+      fileName: fileName || (isPrompt ? 'prompt.txt' : 'Component.tsx'),
     });
     lastIndex = match.index + match[0].length;
   }
 
   const trailingText = rawText.slice(lastIndex);
-  if (trailingText.trim() || segments.length === 0) {
-    segments.push({ type: 'text', content: trailingText || rawText });
+  // Check if trailingText starts a code fence that hasn't received a newline yet (e.g. "```html")
+  const pendingFenceMatch = trailingText.match(/```([a-zA-Z0-9_.-]+)?([^\n]*)$/);
+  if (pendingFenceMatch) {
+    const textBeforeFence = trailingText.slice(0, pendingFenceMatch.index);
+    if (textBeforeFence.trim()) {
+      segments.push({ type: 'text', content: textBeforeFence });
+    }
+    const rawLang = (pendingFenceMatch[1] || '').toLowerCase();
+    const isPrompt = Boolean(rawLang && (rawLang.includes('prompt') || rawLang === 'llm'));
+    segments.push({
+      type: isPrompt ? 'prompt' : 'code',
+      content: '',
+      language: rawLang || (isPrompt ? 'prompt' : 'html'),
+      fileName: isPrompt ? 'prompt.txt' : 'Component.tsx',
+    });
+  } else if (trailingText.trim() || segments.length === 0) {
+    const docTypeMatch = trailingText.match(/<!DOCTYPE\s+html[\s\S]*/i) || trailingText.match(/<html[\s\S]*/i);
+    if (docTypeMatch && docTypeMatch.index !== undefined) {
+      const textBefore = trailingText.slice(0, docTypeMatch.index);
+      if (textBefore.trim()) {
+        segments.push({ type: 'text', content: textBefore });
+      }
+      segments.push({
+        type: 'code',
+        content: trailingText.slice(docTypeMatch.index),
+        language: 'html',
+        fileName: 'index.html',
+      });
+    } else {
+      segments.push({ type: 'text', content: trailingText || rawText });
+    }
   }
+
+  const hasCodeOrPrompt = segments.some((s) => s.type === 'code' || s.type === 'prompt');
 
   return (
     <div className="space-y-4">
       {/* Enhanced typing state indicator when actively streaming */}
       {isStreaming && (
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/90 border border-zinc-700/80 shadow-md text-xs text-zinc-200 font-bold mb-1 select-none">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ff1828] opacity-80" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#ff1828]" />
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-zinc-900/90 border border-zinc-700/80 shadow-md text-xs text-zinc-200 font-bold mb-1 select-none">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00a6ff] opacity-80" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00a6ff]" />
           </span>
-          <span className="tracking-wide">Generating live response</span>
+          <span className="tracking-wide">
+            {hasCodeOrPrompt ? 'Writing & generating source code' : 'Generating live response'}
+          </span>
           <span className="inline-flex gap-1 items-center ml-0.5">
             <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.3s]" />
             <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:-0.15s]" />
@@ -1121,14 +1221,16 @@ export const LiveMessageStreamRenderer: React.FC<{
       )}
 
       {segments.map((seg, idx) => {
-        if (seg.type === 'code') {
+        const isLastSegment = idx === segments.length - 1;
+        if (seg.type === 'code' || seg.type === 'prompt') {
           return (
-            <div key={`seg-code-${idx}`} className="space-y-1.5">
+            <div key={`seg-${seg.type}-${idx}`} className="space-y-1.5">
               <SpecialSnippetBox
-                type="code"
+                type={seg.type}
                 content={seg.content}
-                language={seg.language || 'html'}
+                language={seg.language || (seg.type === 'prompt' ? 'prompt' : 'html')}
                 fileName={seg.fileName}
+                isStreaming={isStreaming && isLastSegment}
                 onOpenFullScreenPreview={onOpenPreview}
                 onOpenFullScreenEditor={onOpenEditor}
                 onUseInChat={onUseInChat}
@@ -1137,7 +1239,6 @@ export const LiveMessageStreamRenderer: React.FC<{
           );
         }
 
-        const isLastSegment = idx === segments.length - 1;
         return (
           <div
             key={`seg-text-${idx}`}
@@ -1152,7 +1253,7 @@ export const LiveMessageStreamRenderer: React.FC<{
             {renderFormattedBoldText(seg.content)}
             {isStreaming && isLastSegment && (
               <span className="inline-flex items-center ml-1.5 align-middle select-none">
-                <span className="inline-block w-2.5 h-5 bg-gradient-to-t from-white via-zinc-100 to-white rounded-[2px] shadow-[0_0_12px_rgba(255,255,255,0.95),0_0_20px_rgba(255,24,40,0.6)] animate-pulse" />
+                <span className="inline-block w-2.5 h-5 bg-gradient-to-t from-white via-zinc-100 to-white rounded-[2px] shadow-[0_0_12px_rgba(255,255,255,0.95),0_0_20px_rgba(0, 166, 255,0.6)] animate-pulse" />
               </span>
             )}
           </div>
@@ -1393,12 +1494,12 @@ export const CompactThinkingPanel: React.FC<CompactThinkingPanelProps> = ({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 15, scale: 0.98 }}
       transition={{ duration: 0.25, ease: 'easeOut' }}
-      className="w-full bg-white text-zinc-900 rounded-[28px] sm:rounded-[32px] px-5 sm:px-6 py-4 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(255,24,40,0.25)] border border-white/90 max-h-60 sm:max-h-64 flex flex-col overflow-hidden"
+      className="w-full bg-white text-zinc-900 rounded-[28px] sm:rounded-[32px] px-5 sm:px-6 py-4 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(0, 166, 255,0.25)] border border-white/90 max-h-60 sm:max-h-64 flex flex-col overflow-hidden"
     >
       {/* Header */}
       <div className="flex items-center justify-between pb-2.5 border-b border-zinc-100 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-[#ff1828]/10 text-[#ff1828] flex items-center justify-center shrink-0">
+          <div className="w-5 h-5 rounded-full bg-[#00a6ff]/10 text-[#00a6ff] flex items-center justify-center shrink-0">
             <Check size={12} strokeWidth={3} />
           </div>
           <span className="text-xs sm:text-sm font-bold text-zinc-900 tracking-tight">
@@ -1463,12 +1564,12 @@ export const InteractiveQuestionCard: React.FC<InteractiveQuestionCardProps> = (
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 15, scale: 0.98 }}
       transition={{ duration: 0.25, ease: 'easeOut' }}
-      className="w-full bg-white text-zinc-900 rounded-[28px] sm:rounded-[32px] px-5 sm:px-6 py-4 sm:py-5 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(255,24,40,0.25)] border border-white/90 flex flex-col transition-all"
+      className="w-full bg-white text-zinc-900 rounded-[28px] sm:rounded-[32px] px-5 sm:px-6 py-4 sm:py-5 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(0, 166, 255,0.25)] border border-white/90 flex flex-col transition-all"
     >
       {/* Top Question Info */}
       <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center gap-1.5 text-[10px] font-bold text-[#ff1828] uppercase tracking-wider">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#ff1828] animate-pulse" />
+        <div className="flex items-center gap-1.5 text-[10px] font-bold text-[#00a6ff] uppercase tracking-wider">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#00a6ff] animate-pulse" />
           <span>Requirement Discovery {totalSteps ? `• Step ${stepNumber || 1} of ${totalSteps}` : ''}</span>
         </div>
       </div>
@@ -1490,12 +1591,12 @@ export const InteractiveQuestionCard: React.FC<InteractiveQuestionCardProps> = (
             type="button"
             disabled={disabled}
             onClick={() => onAnswer(opt)}
-            className="px-3.5 py-2.5 rounded-xl border border-zinc-200/90 bg-zinc-50 hover:bg-[#ff1828]/5 hover:border-[#ff1828] text-xs sm:text-sm font-medium text-zinc-800 hover:text-black transition-all text-left flex items-center justify-between group active:scale-[0.98] cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3.5 py-2.5 rounded-xl border border-zinc-200/90 bg-zinc-50 hover:bg-[#00a6ff]/5 hover:border-[#00a6ff] text-xs sm:text-sm font-medium text-zinc-800 hover:text-black transition-all text-left flex items-center justify-between group active:scale-[0.98] cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="truncate">{opt}</span>
             <ChevronRight
               size={13}
-              className="text-zinc-400 group-hover:text-[#ff1828] group-hover:translate-x-0.5 transition-all shrink-0 ml-1"
+              className="text-zinc-400 group-hover:text-[#00a6ff] group-hover:translate-x-0.5 transition-all shrink-0 ml-1"
             />
           </button>
         ))}
@@ -1516,7 +1617,7 @@ export const InteractiveQuestionCard: React.FC<InteractiveQuestionCardProps> = (
               setCustomInput('');
             }
           }}
-          className="flex-1 bg-zinc-50 border border-zinc-200/90 focus:border-[#ff1828] focus:bg-white rounded-xl px-3.5 py-2 text-xs sm:text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none transition-all disabled:opacity-50"
+          className="flex-1 bg-zinc-50 border border-zinc-200/90 focus:border-[#00a6ff] focus:bg-white rounded-xl px-3.5 py-2 text-xs sm:text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none transition-all disabled:opacity-50"
         />
         <button
           type="button"
@@ -1527,7 +1628,7 @@ export const InteractiveQuestionCard: React.FC<InteractiveQuestionCardProps> = (
               setCustomInput('');
             }
           }}
-          className="px-4 py-2 rounded-xl bg-[#ff1828] text-white text-xs font-semibold hover:bg-[#e01423] disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shadow-[0_0_12px_rgba(255,24,40,0.4)] cursor-pointer shrink-0"
+          className="px-4 py-2 rounded-xl bg-[#00a6ff] text-white text-xs font-semibold hover:bg-[#0094e6] disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shadow-[0_0_12px_rgba(0, 166, 255,0.4)] cursor-pointer shrink-0"
         >
           <span>Submit</span>
           <ArrowRight size={13} />
@@ -1659,10 +1760,10 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
             {/* Step 1: Real Reasoning Duration */}
             <div className="relative group">
               <div className="absolute -left-[31px] sm:-left-[39px] top-1 w-3.5 h-3.5 rounded-full border-2 border-zinc-400 bg-[#120306] flex items-center justify-center">
-                {isAiTyping && <span className="w-1.5 h-1.5 rounded-full bg-[#ff1828] animate-ping" />}
+                {isAiTyping && <span className="w-1.5 h-1.5 rounded-full bg-[#00a6ff] animate-ping" />}
               </div>
               <div className="text-zinc-300 text-xs font-semibold flex items-center gap-1.5 select-none">
-                <span className="text-[#ff1828]">Cognitive Thinking Trace</span>
+                <span className="text-[#00a6ff]">Cognitive Thinking Trace</span>
                 <span className="text-zinc-500">•</span>
                 <span className="text-zinc-400">
                   {isAiTyping ? `Reasoning in real-time (${thinkingTimer || 1}s)` : `Completed in ${message?.thoughtDuration || thinkingTimer || 4}s`}
@@ -1673,7 +1774,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
             {/* Step 2: Intent & Directives Parsing */}
             <div className="relative">
               <div className="absolute -left-[33px] sm:-left-[41px] top-1 w-5 h-5 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-zinc-300">
-                <Brain size={12} className="text-[#ff1828]" />
+                <Brain size={12} className="text-[#00a6ff]" />
               </div>
               <div className="pl-1 space-y-1">
                 <div className="text-zinc-200 font-medium text-xs sm:text-sm">
@@ -1727,7 +1828,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
 
             {/* Step 4: Visual Architecture Synthesis */}
             <div className="relative">
-              <div className="absolute -left-[33px] sm:-left-[41px] top-1 w-5 h-5 rounded-full bg-[#ff1828]/20 border border-[#ff1828]/40 flex items-center justify-center text-[#ff1828]">
+              <div className="absolute -left-[33px] sm:-left-[41px] top-1 w-5 h-5 rounded-full bg-[#00a6ff]/20 border border-[#00a6ff]/40 flex items-center justify-center text-[#00a6ff]">
                 <Layers size={12} />
               </div>
               <div className="pl-1 space-y-1">
@@ -1735,7 +1836,7 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
                   Obsidian Neon Design Synthesis
                 </div>
                 <div className="p-3 rounded-xl bg-black/40 border border-white/10 text-xs text-zinc-300 space-y-1">
-                  <p>• Applied dark obsidian surface <code>#090204</code> & crimson neon accents (<code>#ff1828</code>).</p>
+                  <p>• Applied dark obsidian surface <code>#090204</code> & crimson neon accents (<code>#00a6ff</code>).</p>
                   <p>• Generated 3 to 4 topic-related high-resolution visual cards with instant lightbox & download.</p>
                 </div>
               </div>
@@ -1815,12 +1916,12 @@ export const ThinkingTimelineDrawer: React.FC<ThinkingTimelineDrawerProps> = ({
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             placeholder="Ask a follow-up or command..."
-            className="flex-1 bg-black/40 border border-white/15 rounded-full px-4 py-2 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#ff1828]"
+            className="flex-1 bg-black/40 border border-white/15 rounded-full px-4 py-2 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-[#00a6ff]"
           />
           <button
             type="submit"
             disabled={!inputVal.trim() || isAiTyping}
-            className="w-9 h-9 rounded-full bg-[#ff1828] hover:bg-[#e01423] disabled:opacity-40 text-white flex items-center justify-center shrink-0 transition-all cursor-pointer"
+            className="w-9 h-9 rounded-full bg-[#00a6ff] hover:bg-[#0094e6] disabled:opacity-40 text-white flex items-center justify-center shrink-0 transition-all cursor-pointer"
           >
             <Send size={15} />
           </button>
@@ -1834,36 +1935,25 @@ interface FullScreenChatViewProps {
   isOpen: boolean;
   onClose: () => void;
   initialPrompt?: string;
+  onClearInitialPrompt?: () => void;
   initialAttachments?: AttachedFile[];
   selectedRecentTopic?: string;
   onSelectRecentTopic?: (topic: string) => void;
   onOpenLogin?: () => void;
 }
 
+const GUEST_TOPIC = 'Guest Session';
+
 export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
   isOpen,
   onClose,
   initialPrompt = '',
+  onClearInitialPrompt,
   initialAttachments,
   selectedRecentTopic = '',
   onSelectRecentTopic,
   onOpenLogin,
 }) => {
-  const [chatThreads, setChatThreads] = useState<Record<string, ChatThread>>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const guestSaved = localStorage.getItem('think_creative_guest_threads');
-        if (guestSaved) {
-          const parsed = JSON.parse(guestSaved);
-          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-            return parsed;
-          }
-        }
-      } catch {}
-    }
-    return INITIAL_CHAT_DATA;
-  });
-  const [activeTopic, setActiveTopic] = useState<string>(selectedRecentTopic);
   const [currentUser, setCurrentUser] = useState<any>(() => {
     if (typeof window !== 'undefined') {
       const cached = localStorage.getItem('think_creative_user');
@@ -1876,78 +1966,73 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
     return getCurrentUser();
   });
 
-  // Track Firebase Auth state continuously (saved permanently)
+  const [chatThreads, setChatThreads] = useState<Record<string, ChatThread>>({});
+  const [activeTopic, setActiveTopic] = useState<string>(() => {
+    return selectedRecentTopic || GUEST_TOPIC;
+  });
+
+  const prevUidRef = useRef<string | undefined>(currentUser?.uid);
+
+  // Track Firebase Auth state continuously and handle user transition
   useEffect(() => {
     const unsub = subscribeToAuth((user) => {
+      // If user changed (login or logout), reset state completely
+      if (user?.uid !== prevUidRef.current) {
+        prevUidRef.current = user?.uid;
+        setChatThreads({});
+        if (user && !user.isAnonymous) {
+          setActiveTopic('');
+        } else {
+          setActiveTopic(GUEST_TOPIC);
+        }
+      }
       setCurrentUser(user);
     });
     return () => unsub();
   }, []);
 
-  // Listen to Firestore real-time chats if user is logged in.
-  // If user is guest: restore guest threads from local storage so user can chat freely without logging in!
+  // Listen to Firestore real-time chats if user is logged in
   useEffect(() => {
-    if (!currentUser || !currentUser.uid) {
-      try {
-        const guestSaved = localStorage.getItem('think_creative_guest_threads');
-        if (guestSaved) {
-          const parsed = JSON.parse(guestSaved);
-          if (parsed && typeof parsed === 'object') {
-            setChatThreads(parsed);
-          }
-        }
-      } catch {}
+    if (!currentUser || currentUser.isAnonymous || !currentUser.uid) {
       return;
     }
 
-    // When user logs in, migrate any existing guest chats to Firestore so the user doesn't lose anything
-    try {
-      const guestSaved = localStorage.getItem('think_creative_guest_threads');
-      if (guestSaved) {
-        const guestThreads = JSON.parse(guestSaved);
-        if (guestThreads && typeof guestThreads === 'object') {
-          Object.values(guestThreads).forEach((thread: any) => {
-            if (thread && thread.messages && thread.messages.length > 0) {
-              syncChatThreadToFirestore(thread, currentUser.uid);
-            }
-          });
-          localStorage.removeItem('think_creative_guest_threads');
-        }
-      }
-    } catch {}
-
     const unsub = subscribeToUserChatThreads(currentUser.uid, (firestoreThreads) => {
       setChatThreads((prev) => {
-        return {
-          ...firestoreThreads,
-          ...(prev[activeTopic] && prev[activeTopic].messages.some((m) => m.isStreaming)
-            ? { [activeTopic]: prev[activeTopic] }
-            : {}),
-        };
+        // Merge with existing local threads so we NEVER blow away an active streaming or unsaved thread!
+        const merged: Record<string, ChatThread> = { ...firestoreThreads };
+        for (const [key, thread] of Object.entries(prev)) {
+          const hasStreaming = thread.messages?.some((m) => m.isStreaming);
+          const hasUnsaved = !merged[key] && thread.messages && thread.messages.length > 0;
+          if (hasStreaming || hasUnsaved) {
+            merged[key] = thread;
+          }
+        }
+        return merged;
+      });
+
+      setActiveTopic((curr) => {
+        if (curr) return curr;
+        const keys = Object.keys(firestoreThreads);
+        return keys.length > 0 ? keys[0] : '';
       });
     });
 
     return () => unsub();
-  }, [currentUser?.uid, activeTopic]);
+  }, [currentUser?.uid]);
 
-  // Synchronize completed messages:
-  // - If logged in: save permanently to Firestore in real-time
-  // - If guest: save to localStorage (session history)
+  // Synchronize completed messages strictly to Firestore for authenticated user:
   useEffect(() => {
     if (!activeTopic || !chatThreads[activeTopic]) return;
     const currentThread = chatThreads[activeTopic];
-    if (!currentThread.messages || currentThread.messages.length === 0) return;
-    if (currentThread.messages.some((m) => m.isStreaming)) return;
 
-    if (currentUser?.uid) {
+    if (currentUser?.uid && !currentUser.isAnonymous) {
+      if (!currentThread.messages || currentThread.messages.length === 0) return;
+      if (currentThread.messages.some((m) => m.isStreaming)) return;
       const timer = setTimeout(() => {
         syncChatThreadToFirestore(currentThread, currentUser.uid);
       }, 500);
       return () => clearTimeout(timer);
-    } else {
-      try {
-        localStorage.setItem('think_creative_guest_threads', JSON.stringify(chatThreads));
-      } catch {}
     }
   }, [chatThreads, activeTopic, currentUser?.uid]);
 
@@ -1961,12 +2046,46 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
   const [isThinkingTimelineExpanded, setIsThinkingTimelineExpanded] = useState<boolean>(false);
   const [activeTimelineMessage, setActiveTimelineMessage] = useState<ChatMessage | null>(null);
   const [isMemoryDrawerOpen, setIsMemoryDrawerOpen] = useState<boolean>(false);
+  const { theme, toggleTheme } = useTheme();
+  const themeMode = theme;
+  const toggleThemeMode = toggleTheme;
+  const [isInternalLoginOpen, setIsInternalLoginOpen] = useState<boolean>(false);
+
+  const handleOpenLogin = () => {
+    setIsInternalLoginOpen(true);
+    if (onOpenLogin) onOpenLogin();
+  };
 
   // Proactive Question Queue in Prompt Box (Pure prompt box flow, no question in chat, no option prompt bubbles)
   const [promptQuestionQueue, setPromptQuestionQueue] = useState<QuestionBlock[]>([]);
   const [promptQuestionIdx, setPromptQuestionIdx] = useState<number>(0);
   const collectedAnswersRef = useRef<Record<string, string>>({});
   const pendingVaguePromptRef = useRef<string>('');
+  const askedQuestionsRef = useRef<Set<string>>(new Set());
+  const answeredQuestionsRef = useRef<Record<string, string>>({});
+  const detectedInfoRef = useRef<Record<string, string>>({});
+  const clarificationDecisionRef = useRef<ClarificationDecision | null>(null);
+
+  // Clarification Gate Interactive State
+  const [pendingClarificationDecision, setPendingClarificationDecision] = useState<ClarificationDecision | null>(null);
+  const [askedQuestionsList, setAskedQuestionsList] = useState<string[]>([]);
+  const [answeredQuestionsMap, setAnsweredQuestionsMap] = useState<Record<string, string>>({});
+  const [detectedInfoMap, setDetectedInfoMap] = useState<Record<string, string>>({});
+  const [isCheckingGate, setIsCheckingGate] = useState<boolean>(false);
+  const [isClarificationMenuOpen, setIsClarificationMenuOpen] = useState<boolean>(false);
+  const [clarificationSettings, setClarificationSettings] = useState<{
+    enabled: boolean;
+    strictness: 'minimal' | 'balanced' | 'thorough';
+  }>({
+    enabled: true,
+    strictness: 'balanced',
+  });
+
+  const updateClarificationSettings = (
+    patch: Partial<{ enabled: boolean; strictness: 'minimal' | 'balanced' | 'thorough' }>
+  ) => {
+    setClarificationSettings((prev) => ({ ...prev, ...patch }));
+  };
 
   // Message Send Lock & Process Overview Panel State
   const [isSendLocked, setIsSendLocked] = useState<boolean>(false);
@@ -2518,14 +2637,150 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
     showToast('Message deleted');
   };
 
+  const handleClarificationSubmit = (
+    decision: ClarificationDecision,
+    answers: Record<string, string>
+  ) => {
+    setPendingClarificationDecision(null);
+    setIsSendLocked(true);
+
+    // Save answered questions map and detected info
+    setAnsweredQuestionsMap((prev) => ({ ...prev, ...answers }));
+    if (decision.detected_info) {
+      setDetectedInfoMap((prev) => ({ ...prev, ...decision.detected_info }));
+    }
+
+    // Build compact summary of answers for chat display
+    const answerLines = Object.entries(answers).map(([qId, ans]) => {
+      const q = decision.questions.find((item) => item.id === qId);
+      return `• ${q?.question || qId}: ${ans}`;
+    });
+
+    const userSummaryMsg: ChatMessage = {
+      id: `user-ans-${Date.now()}`,
+      sender: 'user',
+      text: `Requirements specified:\n${answerLines.join('\n')}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    // Form the enriched prompt
+    const originalPrompt =
+      currentThread?.promptBanner || decision.missing_critical?.join(', ') || 'Task execution';
+    let enrichedPrompt = buildEnrichedTaskPrompt(originalPrompt, decision, answers);
+
+    const isCodeOrWebsite =
+      decision.task_type === 'website' ||
+      decision.task_type === 'app' ||
+      decision.task_type === 'code' ||
+      /website|landing\s*page|web\s*app|single-file|html/i.test(originalPrompt);
+
+    if (isCodeOrWebsite) {
+      enrichedPrompt += `\n\nMANDATORY ARCHITECTURE & CODE INTEGRITY REQUIREMENT:
+You MUST generate the 100% complete, fully implemented single-file HTML code.
+The code fence MUST start strictly with: \`\`\`html filename="index.html"
+<!DOCTYPE html>
+<html lang="en">
+and MUST complete all the way through to: </html>
+\`\`\`
+Embed all modern CSS inside <style>...</style> and all functional JavaScript inside <script>...</script>.
+NEVER truncate, never use placeholders like "/* rest of code here */", and never stop before closing </html>.`;
+    }
+
+    const aiMsgId = `ai-gen-${Date.now()}`;
+    const aiPlaceholder: ChatMessage = {
+      id: aiMsgId,
+      sender: 'ai',
+      text: '',
+      isStreaming: true,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setChatThreads((prev) => {
+      const existing = prev[activeTopic];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [activeTopic]: {
+          ...existing,
+          messages: [...existing.messages, userSummaryMsg, aiPlaceholder],
+        },
+      };
+    });
+
+    startGeminiStream(activeTopic, aiMsgId, enrichedPrompt, pendingAttachmentsRef.current || []);
+  };
+
+  const handleClarificationSkip = (decision: ClarificationDecision) => {
+    setPendingClarificationDecision(null);
+    setIsSendLocked(true);
+
+    const assumptions =
+      decision.assumptions_if_skipped && decision.assumptions_if_skipped.length > 0
+        ? decision.assumptions_if_skipped
+        : ['Using standard high-performance defaults'];
+
+    const userSkipMsg: ChatMessage = {
+      id: `user-skip-${Date.now()}`,
+      sender: 'user',
+      text: `Proceeding with AI defaults (skipped questions).`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const originalPrompt = currentThread?.promptBanner || 'Task execution';
+    let enrichedPrompt = `${originalPrompt}\n\nWORKING ASSUMPTIONS (User opted to proceed with AI defaults):\n${assumptions
+      .map((a) => `- ${a}`)
+      .join('\n')}`;
+
+    const isCodeOrWebsite =
+      decision.task_type === 'website' ||
+      decision.task_type === 'app' ||
+      decision.task_type === 'code' ||
+      /website|landing\s*page|web\s*app|single-file|html/i.test(originalPrompt);
+
+    if (isCodeOrWebsite) {
+      enrichedPrompt += `\n\nMANDATORY ARCHITECTURE & CODE INTEGRITY REQUIREMENT:
+You MUST generate the 100% complete, fully implemented single-file HTML code.
+The code fence MUST start strictly with: \`\`\`html filename="index.html"
+<!DOCTYPE html>
+<html lang="en">
+and MUST complete all the way through to: </html>
+\`\`\`
+Embed all modern CSS inside <style>...</style> and all functional JavaScript inside <script>...</script>.
+NEVER truncate, never use placeholders like "/* rest of code here */", and never stop before closing </html>.`;
+    }
+
+    const aiMsgId = `ai-gen-${Date.now()}`;
+    const aiPlaceholder: ChatMessage = {
+      id: aiMsgId,
+      sender: 'ai',
+      text: '',
+      isStreaming: true,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setChatThreads((prev) => {
+      const existing = prev[activeTopic];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [activeTopic]: {
+          ...existing,
+          messages: [...existing.messages, userSkipMsg, aiPlaceholder],
+        },
+      };
+    });
+
+    startGeminiStream(activeTopic, aiMsgId, enrichedPrompt, pendingAttachmentsRef.current || []);
+  };
+
   const handleAnswerQuestionInChat = (msgId: string, answer: string) => {
     if (isAiTyping) return;
 
-    // Collect user selection
-    const qKey = promptQuestionIdx === 0 ? 'time' : 'focus';
+    // Collect user selection dynamically by question title/id
+    const currentQ = promptQuestionQueue[promptQuestionIdx];
+    const qKey = currentQ ? currentQ.title : `Question ${promptQuestionIdx + 1}`;
     collectedAnswersRef.current[qKey] = answer;
-    if (promptQuestionIdx === 0) collectedAnswersRef.current['theme'] = answer;
-    if (promptQuestionIdx === 1) collectedAnswersRef.current['name'] = answer;
+    answeredQuestionsRef.current[qKey] = answer;
 
     const userAnsMsg: ChatMessage = {
       id: `user-ans-${Date.now()}`,
@@ -2576,10 +2831,59 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
       setPromptQuestionIdx(0);
 
       const userPrompt = pendingVaguePromptRef.current || 'Create a complete high-performance solution';
+      pendingVaguePromptRef.current = '';
+
+      const decision = clarificationDecisionRef.current;
+      const isWebsiteOrCode =
+        /<!doctype\s+html|<html|website|landing\s*page|web\s*app|html\s*code|create.*website|build.*website|single-file|component|app|code|script|program/i.test(
+          userPrompt
+        ) ||
+        decision?.task_type === 'website' ||
+        decision?.task_type === 'app' ||
+        decision?.task_type === 'code';
+
       const isTimetable =
         /(\btimetable\b|\btime\s*table\b|\broutine\b|\bdaily\s*routine\b|\bschedule\b|\bday\s*plan\b|\bplanner\b|\bstudy\s*plan\b|\bworkout\s*routine\b|\bworkout\s*plan\b)/i.test(
           userPrompt
         );
+
+      const answersList = Object.entries(collectedAnswersRef.current)
+        .map(([q, a]) => `- ${q}: ${a}`)
+        .join('\n');
+
+      let fullExecutionPrompt = `${userPrompt}
+
+USER SPECIFICATIONS & PREFERENCES:
+${answersList}`;
+
+      if (decision?.assumptions_if_skipped && decision.assumptions_if_skipped.length > 0) {
+        fullExecutionPrompt += `\n\nASSUMPTIONS & DESIGN DEFAULTS:\n${decision.assumptions_if_skipped.map((a) => `- ${a}`).join('\n')}`;
+      }
+
+      if (isWebsiteOrCode) {
+        fullExecutionPrompt += `\n\nCRITICAL ARCHITECTURE REQUIREMENTS:
+1. The code must be 100% complete and self-contained in ONE SINGLE HTML FILE.
+2. It MUST start strictly with:
+\`\`\`html filename="index.html"
+<!DOCTYPE html>
+<html lang="en">
+3. Include modern, beautiful CSS inside <style>...</style> with dark glassmorphism, responsive navigation, responsive grid, hero section, interactive cards, and footer.
+4. Include functional JavaScript inside <script>...</script> for menu toggle, interactions, and dynamic state.
+5. It MUST end cleanly with:
+</html>
+\`\`\`
+6. NEVER truncate or stop generating early. Provide every single line of code until </html>.`;
+      } else if (isTimetable) {
+        fullExecutionPrompt += `\n\nCRITICAL MANDATORY INSTRUCTIONS:
+1. Provide a comprehensive, hourly timetable breakdown from wake-up to restorative sleep.
+2. Include a self-contained single-file HTML interactive timetable code:
+\`\`\`html filename="timetable.html"
+<!DOCTYPE html>
+<html lang="en">
+...
+</html>
+\`\`\``;
+      }
 
       const aiMsgId = `ai-${Date.now()}`;
       const aiPlaceholder: ChatMessage = {
@@ -2607,76 +2911,6 @@ export const FullScreenChatView: React.FC<FullScreenChatViewProps> = ({
           },
         };
       });
-
-      let fullExecutionPrompt = '';
-
-      if (isTimetable) {
-        const timeChoice = collectedAnswersRef.current['time'] || collectedAnswersRef.current['theme'] || 'Early Riser (05:00 AM – 06:00 AM)';
-        const focusChoice = collectedAnswersRef.current['focus'] || collectedAnswersRef.current['name'] || 'High-Performance Work & Fitness';
-
-        fullExecutionPrompt = `Create a masterclass-level, complete daily timetable and schedule for: "${userPrompt}".
-Selected Routine Specifications:
-- Wake-up / Start Schedule: ${timeChoice}
-- Primary Focus & Priority: ${focusChoice}
-
-CRITICAL MANDATORY INSTRUCTIONS:
-1. Provide a comprehensive, perfectly structured hourly timetable breakdown from wake-up to restorative sleep.
-2. For each time block, format clearly as a bullet point with the exact time slot, activity name, category (Morning, Deep Work, Fitness, Nutrition, Evening, or Sleep), and key productivity habits:
-Example:
-- 05:30 AM - 06:30 AM: Morning Mobility & Hydration - [Morning] Wake up, drink 500ml water, 15 min mobility.
-- 06:30 AM - 07:30 AM: Intense Workout & Strength - [Fitness] High-focus resistance training.
-- 08:00 AM - 09:00 AM: Breakfast & Daily Roadmap - [Nutrition] Clean fuel, reviewing daily priority targets.
-- 09:00 AM - 12:30 PM: Deep Work Block 1 - [Deep Work] High-value focused task execution (No phone/distractions).
-- 12:30 PM - 01:30 PM: Nutritious Lunch & Outdoor Walk - [Nutrition] Balanced meal & sunlight recovery.
-- 01:30 PM - 05:00 PM: Deep Work Block 2 - [Deep Work] Secondary projects, communication, and execution.
-- 05:00 PM - 06:30 PM: Skill Acquisition & Creative Time - [Evening] Reading, side project, or personal hobby.
-- 06:30 PM - 08:00 PM: Dinner & Social Connection - [Nutrition] Healthy dinner and quality time with family.
-- 08:00 PM - 09:30 PM: Evening Wind-Down & Reflection - [Evening] Journaling, planning tomorrow, low blue light.
-- 09:30 PM - 10:30 PM: Reading & Sleep Preparation - [Sleep] Book reading, room cooling, gratitude review.
-- 10:30 PM: Restorative Deep Sleep - [Sleep] Lights out, 7.5-8 hours restorative sleep.
-
-3. In addition to the textual guide, provide a complete, self-contained single-file HTML interactive timetable code:
-\`\`\`html filename="timetable.html"
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Daily Routine Timetable</title>
-  <style>
-    /* modern dark obsidian CSS styling with crimson neon accents (#ff1828) */
-  </style>
-</head>
-<body>
-...
-</body>
-</html>
-\`\`\`
-4. Include modern dark obsidian CSS styling with crimson neon accents (#ff1828), interactive hourly cards, progress tracking, and clean layout.
-5. The code block MUST start strictly with <!DOCTYPE html><html lang="en"> and end strictly with </html>.
-6. The user will be able to download the complete timetable as a high-resolution PNG image and view it full-screen.`;
-      } else {
-        const themeChoice = collectedAnswersRef.current['theme'] || 'Luxury Dark Obsidian & Crimson Neon';
-        const nameChoice = collectedAnswersRef.current['name'] || 'M-Power Velocity';
-
-        fullExecutionPrompt = `Create a complete single-file website for: "${userPrompt}".
-Selected Specifications:
-- Purpose & Visual Theme: ${themeChoice}
-- Website Name & Branding: ${nameChoice}
-
-CRITICAL ARCHITECTURE REQUIREMENTS:
-1. The code must be 100% complete and self-contained in ONE SINGLE HTML FILE.
-2. It MUST start strictly with:
-\`\`\`html filename="index.html"
-<!DOCTYPE html>
-<html lang="en">
-3. Include modern, beautiful CSS inside <style>...</style> with dark glassmorphism, responsive navigation, responsive grid, hero section, interactive cards, and footer.
-4. Include functional JavaScript inside <script>...</script> for menu toggle, interactions, and dynamic state.
-5. It MUST end cleanly with:
-</html>
-\`\`\`
-6. NEVER truncate or stop generating early. Provide every single line of code until </html>.`;
-      }
 
       startGeminiStream(activeTopic, aiMsgId, fullExecutionPrompt, pendingAttachmentsRef.current || []);
     }
@@ -2778,12 +3012,12 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
           <title>${title} — AI Studio Intelligence</title>
           <style>
             body { background: #070709; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px; line-height: 1.7; }
-            h1 { font-size: 2.2rem; color: #fff; border-bottom: 3px solid #ff1828; padding-bottom: 10px; }
-            h2 { font-size: 1.4rem; color: #fff; margin-top: 2rem; border-left: 4px solid #ff1828; padding-left: 10px; }
-            pre { background: #0e0204; border: 1px solid rgba(255,24,40,0.3); padding: 16px; border-radius: 12px; font-family: monospace; color: #f4f4f5; overflow-x: auto; }
+            h1 { font-size: 2.2rem; color: #fff; border-bottom: 3px solid #00a6ff; padding-bottom: 10px; }
+            h2 { font-size: 1.4rem; color: #fff; margin-top: 2rem; border-left: 4px solid #00a6ff; padding-left: 10px; }
+            pre { background: #0e0204; border: 1px solid rgba(0, 166, 255,0.3); padding: 16px; border-radius: 12px; font-family: monospace; color: #f4f4f5; overflow-x: auto; }
             ul { padding-left: 20px; }
             li { margin-bottom: 8px; color: #d4d4d8; }
-            .header-tag { display: inline-block; padding: 4px 12px; background: #1a0306; border: 1px solid #ff1828; color: #ff1828; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
+            .header-tag { display: inline-block; padding: 4px 12px; background: #1a0306; border: 1px solid #00a6ff; color: #00a6ff; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
           </style>
         </head>
         <body>
@@ -2847,6 +3081,98 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
   }, []);
 
   /**
+   * AI Image Planner & Search Pipeline
+   * Decides reference images per assistant message and executes multi-crawler search.
+   */
+  const runImagePlannerAndSearch = async (
+    targetTopic: string,
+    aiMsgId: string,
+    promptText: string,
+    assistantAnswerText: string,
+    modeOverride?: 'USER_REQUESTED' | 'AUTO_REFERENCE' | 'NONE'
+  ) => {
+    try {
+      const thread = chatThreads[targetTopic];
+      const recentHistory = (thread?.messages || []).slice(-10).map((m) => ({
+        sender: m.sender,
+        text: m.text,
+      }));
+
+      const planRes = await fetch('/api/image-planner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: promptText,
+          history: recentHistory,
+          assistantAnswer: assistantAnswerText,
+        }),
+      });
+
+      if (!planRes.ok) return;
+      const plan: ImagePlannerResult = await planRes.json();
+      if (!plan || plan.mode === 'NONE' || !plan.subjects || plan.subjects.length === 0) {
+        return;
+      }
+
+      const effectiveMode: 'USER_REQUESTED' | 'AUTO_REFERENCE' | 'NONE' = modeOverride || plan.mode;
+      if (effectiveMode === 'NONE') return;
+
+      const searchRes = await fetch('/api/reference-images/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subjects: plan.subjects,
+          mode: effectiveMode,
+        }),
+      });
+
+      if (!searchRes.ok) return;
+      const searchData = await searchRes.json();
+      const results: any[] = searchData?.results || [];
+      if (results.length === 0) return;
+
+      const subjectGalleries = results.map((r) => ({
+        label: r.subject.label,
+        images: r.images || [],
+        backupPool: r.backupPool || [],
+        googleSearchUrl: r.googleSearchUrl,
+      }));
+
+      const totalImages = subjectGalleries.reduce((acc, g) => acc + g.images.length, 0);
+
+      // Rule: AUTO_REFERENCE requires at least 3 images, otherwise show none
+      if (effectiveMode === 'AUTO_REFERENCE' && totalImages < 3) {
+        return;
+      }
+
+      setChatThreads((prev) => {
+        const existing = prev[targetTopic];
+        if (!existing) return prev;
+        return {
+          ...prev,
+          [targetTopic]: {
+            ...existing,
+            messages: existing.messages.map((m) =>
+              m.id === aiMsgId
+                ? {
+                    ...m,
+                    imagePlan: {
+                      mode: effectiveMode,
+                      shortReplyText: plan.short_reply_text,
+                      subjects: subjectGalleries,
+                    },
+                  }
+                : m
+            ),
+          },
+        };
+      });
+    } catch (err) {
+      console.warn('Image planning notice:', err);
+    }
+  };
+
+  /**
    * AI Streaming Engine: Groq Primary / Gemini Fallback
    * Thinking mode stays active until answer is fully received, with timer isolated to thinking phase only.
    */
@@ -2857,6 +3183,12 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     attachmentsToPass: AttachedFile[] = []
   ) => {
     const isSimple = isSimpleMessage(promptText);
+
+    // Parallel Image Planner for USER_REQUESTED visual queries
+    const isExplicitVisual = isUserExplicitImageRequest(promptText);
+    if (isExplicitVisual) {
+      runImagePlannerAndSearch(topicKey, aiMsgId, promptText, '', 'USER_REQUESTED');
+    }
 
     setIsAiTyping(true);
     if (!isSimple) {
@@ -2966,23 +3298,55 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
                   // Update message in real time with incoming stream text!
                   setChatThreads((prev) => {
-                    const thread = prev[topicKey];
-                    if (!thread) return prev;
-                    return {
-                      ...prev,
-                      [topicKey]: {
-                        ...thread,
-                        messages: thread.messages.map((m) =>
+                    const thread = prev[topicKey] || {
+                      id: `thread-${Date.now()}`,
+                      title: topicKey,
+                      promptBanner: promptText,
+                      messages: [
+                        {
+                          id: `user-${Date.now()}`,
+                          sender: 'user',
+                          text: promptText,
+                          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        },
+                        {
+                          id: aiMsgId,
+                          sender: 'ai',
+                          text: '',
+                          isStreaming: true,
+                          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        },
+                      ],
+                    };
+                    const hasAiMsg = thread.messages.some((m) => m.id === aiMsgId);
+                    const updatedMessages = hasAiMsg
+                      ? thread.messages.map((m) =>
                           m.id === aiMsgId
                             ? {
                                 ...m,
                                 text: currentCleanText,
-                                isStreaming: false,
+                                isStreaming: true,
                                 thoughtDuration: finalThoughtDuration,
-                                structuredContent: undefined,
                               }
                             : m
-                        ),
+                        )
+                      : [
+                          ...thread.messages,
+                          {
+                            id: aiMsgId,
+                            sender: 'ai' as const,
+                            text: currentCleanText,
+                            isStreaming: true,
+                            thoughtDuration: finalThoughtDuration,
+                            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                          },
+                        ];
+
+                    return {
+                      ...prev,
+                      [topicKey]: {
+                        ...thread,
+                        messages: updatedMessages,
                       },
                     };
                   });
@@ -3044,13 +3408,22 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
         // Set final formatted structured content with instant code boxes
         setChatThreads((prev) => {
-          const thread = prev[topicKey];
-          if (!thread) return prev;
-          return {
-            ...prev,
-            [topicKey]: {
-              ...thread,
-              messages: thread.messages.map((m) =>
+          const thread = prev[topicKey] || {
+            id: `thread-${Date.now()}`,
+            title: topicKey,
+            promptBanner: promptText,
+            messages: [
+              {
+                id: `user-${Date.now()}`,
+                sender: 'user',
+                text: promptText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              },
+            ],
+          };
+          const hasAiMsg = thread.messages.some((m) => m.id === aiMsgId);
+          const finalMessages = hasAiMsg
+            ? thread.messages.map((m) =>
                 m.id === aiMsgId
                   ? {
                       ...m,
@@ -3064,8 +3437,41 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                       activeQuestion: extractedQuestion || undefined,
                     }
                   : m
-              ),
-            },
+              )
+            : [
+                ...thread.messages,
+                {
+                  id: aiMsgId,
+                  sender: 'ai' as const,
+                  text: cleanFullAnswer,
+                  isStreaming: false,
+                  thoughtDuration: finalThoughtDuration,
+                  structuredContent:
+                    parsed.mainTitle || parsed.intro || parsed.sections.length > 0
+                      ? parsed
+                      : undefined,
+                  activeQuestion: extractedQuestion || undefined,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                },
+              ];
+
+          const updatedThread = {
+            ...thread,
+            messages: finalMessages,
+          };
+
+          if (currentUser?.uid && !currentUser.isAnonymous) {
+            syncChatThreadToFirestore(updatedThread, currentUser.uid);
+          }
+
+          // Trigger post-stream AUTO_REFERENCE Image Planner if not an explicit visual request
+          if (!isExplicitVisual && !isSimple && cleanFullAnswer.length > 80) {
+            runImagePlannerAndSearch(topicKey, aiMsgId, promptText, cleanFullAnswer, 'AUTO_REFERENCE');
+          }
+
+          return {
+            ...prev,
+            [topicKey]: updatedThread,
           };
         });
       }
@@ -3138,19 +3544,25 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
   const pendingAttachmentsRef = useRef<AttachedFile[]>([]);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  // Sync activeTopic when prop changes
+  const prevSelectedTopicRef = useRef<string>(selectedRecentTopic);
+  // Sync activeTopic when prop changes (only if user explicitly selected a different recent topic and no incoming initialPrompt)
   useEffect(() => {
-    if (selectedRecentTopic && chatThreads[selectedRecentTopic]) {
+    if (selectedRecentTopic && selectedRecentTopic !== prevSelectedTopicRef.current && !initialPrompt) {
+      prevSelectedTopicRef.current = selectedRecentTopic;
       setActiveTopic(selectedRecentTopic);
     }
-  }, [selectedRecentTopic]);
+  }, [selectedRecentTopic, initialPrompt]);
 
   // Handle incoming initial prompt from the BMW road screen with real Gemini streaming!
   useEffect(() => {
     if (initialPrompt && initialPrompt.trim()) {
       setIsSendLocked(true);
       const trimmed = initialPrompt.trim();
-      const newTopicName = trimmed.length > 25 ? `${trimmed.slice(0, 25)}...` : trimmed;
+      const isAuth = Boolean(currentUser && !currentUser.isAnonymous);
+      const targetTopic = isAuth
+        ? (trimmed.length > 25 ? `${trimmed.slice(0, 25)}...` : trimmed)
+        : GUEST_TOPIC;
+
       const userMsgId = `msg-user-${Date.now()}`;
       const aiMsgId = `msg-ai-${Date.now()}`;
 
@@ -3170,21 +3582,31 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
-      const newThread: ChatThread = {
-        id: `thread-${Date.now()}`,
-        title: newTopicName,
-        promptBanner: trimmed,
-        messages: [userMessage, aiPlaceholder],
-      };
+      setChatThreads((prev) => {
+        const existing = prev[targetTopic] || {
+          id: `thread-${Date.now()}`,
+          title: targetTopic,
+          promptBanner: trimmed,
+          messages: [],
+        };
+        return {
+          [targetTopic]: {
+            ...existing,
+            messages: [...existing.messages, userMessage, aiPlaceholder],
+          },
+          ...prev,
+        };
+      });
 
-      setChatThreads((prev) => ({
-        [newTopicName]: newThread,
-        ...prev,
-      }));
-      setActiveTopic(newTopicName);
+      setActiveTopic(targetTopic);
+      if (onSelectRecentTopic && isAuth) {
+        onSelectRecentTopic(targetTopic);
+      }
 
-      // Start real streaming with typing animation
-      startGeminiStream(newTopicName, aiMsgId, trimmed, initialAttachments || []);
+      onClearInitialPrompt?.();
+
+      // Start real streaming with typing animation & haptics
+      startGeminiStream(targetTopic, aiMsgId, trimmed, initialAttachments || []);
     }
   }, [initialPrompt]);
 
@@ -3258,7 +3680,12 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     }
   }, [chatThreads, isAiTyping]);
 
-  const currentThread = chatThreads[activeTopic] || chatThreads['Landing Page Design'];
+  const isAuthUser = Boolean(currentUser && !currentUser.isAnonymous);
+  const currentThread =
+    chatThreads[activeTopic] ||
+    Object.values(chatThreads).find((t) => t.id === activeTopic || t.title === activeTopic) ||
+    chatThreads[selectedRecentTopic] ||
+    (isAuthUser ? Object.values(chatThreads)[0] : chatThreads[GUEST_TOPIC]);
 
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -3285,190 +3712,227 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     setShowScrollBottomBtn(false);
     scrollToBottom(true);
 
+    const isAuth = Boolean(currentUser && !currentUser.isAnonymous);
+    const targetTopic = isAuth
+      ? (activeTopic || `Chat ${Object.keys(chatThreads).length + 1}`)
+      : GUEST_TOPIC;
+
+    if (activeTopic !== targetTopic) {
+      setActiveTopic(targetTopic);
+      if (onSelectRecentTopic && isAuth) onSelectRecentTopic(targetTopic);
+    }
+
     // Check if user is asking to create a timetable or routine
     const isTimetableRequest =
       /(\btimetable\b|\btime\s*table\b|\broutine\b|\bdaily\s*routine\b|\bschedule\b|\bday\s*plan\b|\bplanner\b|\bstudy\s*plan\b|\bworkout\s*routine\b|\bworkout\s*plan\b)/i.test(
         messageText
       );
 
-    // Check if user is asking to create a website or web project
+    // Check if user is asking to create a website or web project (only trigger discovery questionnaire for short, open prompts)
     const isWebsiteOrAppRequest =
       !isTimetableRequest &&
+      messageText.length < 80 &&
+      !messageText.includes('<') &&
+      !messageText.includes('{') &&
       (/(\bwebsite\b|\blanding\s*page\b|\bweb\s*app\b|\bportfolio\b|\bweb\s*page\b|\bsite\b)/i.test(messageText) ||
       /(create|build|make|design|generate|develop|code|need|want).*(website|page|site|app|portfolio)/i.test(messageText));
 
-    if (isTimetableRequest) {
-      const isWorkout = /workout|gym|fitness|exercise|training/i.test(messageText);
-      const isStudy = /study|exam|revision|academic|homework/i.test(messageText);
-
-      let TIMETABLE_QUESTIONS: QuestionBlock[];
-
-      if (isWorkout) {
-        TIMETABLE_QUESTIONS = [
-          {
-            id: `q-time-${Date.now()}`,
-            title: 'What time do you prefer to exercise or train?',
-            description: 'Choose your workout window or type custom training hours.',
-            options: [
-              'Morning Energy (06:00 AM – 07:30 AM)',
-              'Midday Session (12:00 PM – 01:30 PM)',
-              'Evening Power (06:00 PM – 07:30 PM)',
-            ],
-          },
-          {
-            id: `q-focus-${Date.now() + 1}`,
-            title: 'What is your primary fitness target?',
-            description: 'Select your main target or enter specific routine details.',
-            options: [
-              'Hypertrophy & Strength (Push/Pull/Legs)',
-              'Fat Loss, HIIT & Conditioning',
-              'Athletic Mobility & Calisthenics',
-            ],
-          },
-        ];
-      } else if (isStudy) {
-        TIMETABLE_QUESTIONS = [
-          {
-            id: `q-time-${Date.now()}`,
-            title: 'What is your peak concentration window for studying?',
-            description: 'Select your peak concentration time or enter custom hours.',
-            options: [
-              'Early Morning Focus (06:00 AM – 10:00 AM)',
-              'Afternoon Deep Session (01:00 PM – 05:00 PM)',
-              'Night Owl Study (08:00 PM – 12:00 AM)',
-            ],
-          },
-          {
-            id: `q-focus-${Date.now() + 1}`,
-            title: 'What is your main study objective?',
-            description: 'Choose your academic goal or specify subjects/exams.',
-            options: [
-              'Exam Preparation & High Scores',
-              'Tech, Coding & Skill Mastery',
-              'Daily Curriculum & Deep Reading',
-            ],
-          },
-        ];
-      } else {
-        TIMETABLE_QUESTIONS = [
-          {
-            id: `q-time-${Date.now()}`,
-            title: 'What time do you usually wake up or start your daily routine?',
-            description: 'Select your waking schedule or enter your exact start time.',
-            options: [
-              'Early Riser (05:00 AM – 06:00 AM)',
-              'Standard Morning (07:00 AM – 08:00 AM)',
-              'Flexible / Late Start (09:00 AM – 10:00 AM)',
-            ],
-          },
-          {
-            id: `q-focus-${Date.now() + 1}`,
-            title: 'What is the primary focus of your daily timetable?',
-            description: 'Select your core focus or enter custom priorities.',
-            options: [
-              'High-Performance Work & Fitness (Deep Work + Gym + Clean Diet)',
-              'Study, Revision & Skill Growth (Focus Blocks + Breaks)',
-              'Balanced Lifestyle & Wellbeing (Work + Health + Mindfulness)',
-            ],
-          },
-        ];
+    // 1. If user typed in the normal chat box while there is a pending clarification:
+    // Parse the input as answers to the pending questions!
+    if (pendingClarificationDecision) {
+      const activeDecision = pendingClarificationDecision;
+      // If user typed "skip" or let AI decide:
+      if (isSkipIntent(messageText)) {
+        handleClarificationSkip(activeDecision);
+        return;
       }
+      // Otherwise, record answers and proceed
+      const firstQId = activeDecision.questions[0]?.id || 'custom_input';
+      const userAnswers: Record<string, string> = {
+        [firstQId]: messageText,
+      };
+      handleClarificationSubmit(activeDecision, userAnswers);
+      return;
+    }
 
-      // Add user message AND the first interactive question card directly IN CHAT
-      const aiFirstQMsg: ChatMessage = {
-        id: `ai-q-${Date.now()}`,
+    // 2. Fast check for skip / let-AI-decide intent on a new message
+    if (isSkipIntent(messageText)) {
+      setIsSendLocked(true);
+      const aiMsgId = `ai-${Date.now()}`;
+      const aiPlaceholder: ChatMessage = {
+        id: aiMsgId,
         sender: 'ai',
         text: '',
+        isStreaming: true,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        activeQuestion: TIMETABLE_QUESTIONS[0],
       };
 
       setChatThreads((prev) => {
-        const existing = prev[activeTopic] || {
+        const existing = prev[targetTopic] || {
           id: `thread-${Date.now()}`,
-          title: activeTopic,
+          title: targetTopic,
           promptBanner: messageText,
           messages: [],
         };
         return {
           ...prev,
-          [activeTopic]: {
+          [targetTopic]: {
             ...existing,
-            messages: [...existing.messages, userMessage, aiFirstQMsg],
+            messages: [...existing.messages, userMessage, aiPlaceholder],
           },
         };
       });
 
-      pendingVaguePromptRef.current = messageText;
-      collectedAnswersRef.current = {};
-      setPromptQuestionQueue(TIMETABLE_QUESTIONS);
-      setPromptQuestionIdx(0);
-      setIsSendLocked(false);
+      startGeminiStream(
+        targetTopic,
+        aiMsgId,
+        `${messageText}\n\nWORKING ASSUMPTIONS: Proceed with intelligent defaults.`,
+        currentAtts
+      );
       return;
     }
 
-    if (isWebsiteOrAppRequest) {
-      // Prepare discovery questions
-      const DISCOVERY_QUESTIONS: QuestionBlock[] = [
-        {
-          id: `q-theme-${Date.now()}`,
-          title: 'What is the primary visual theme and vibe for this website?',
-          description: 'Select a visual direction or enter your custom aesthetic preference.',
-          options: [
-            'Luxury Dark Obsidian & Crimson Neon (Futuristic, High-Impact)',
-            'Modern Glassmorphic & Bento Grid (Clean SaaS, Tech Portal)',
-            'Minimalist Editorial & Monospace (Sleek Creative Studio)',
-          ],
-        },
-        {
-          id: `q-name-${Date.now() + 1}`,
-          title: 'What is the website name and branding identity?',
-          description: 'Choose a naming style or type your exact brand name and header title.',
-          options: [
-            'Velocity Apex (High-Performance Engineering)',
-            'Luminary Studio (Digital Innovation & Design)',
-            'Obsidian Labs (Next-Gen Intelligent Systems)',
-          ],
-        },
-      ];
+    // 3. Clarification Gate Evaluation (when enabled)
+    if (clarificationSettings.enabled) {
+      setIsCheckingGate(true);
+      setIsSendLocked(true);
 
-      // Add user message AND the first interactive question card directly IN CHAT
-      const aiFirstQMsg: ChatMessage = {
-        id: `ai-q-${Date.now()}`,
-        sender: 'ai',
-        text: '',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        activeQuestion: DISCOVERY_QUESTIONS[0],
-      };
+      (async () => {
+        let decision: ClarificationDecision | null = null;
+        try {
+          const historyForGate = (currentThread?.messages || []).slice(-10).map((m) => ({
+            sender: m.sender,
+            text: m.text,
+          }));
 
-      setChatThreads((prev) => {
-        const existing = prev[activeTopic] || {
-          id: `thread-${Date.now()}`,
-          title: activeTopic,
-          promptBanner: messageText,
-          messages: [],
+          const res = await fetch('/api/clarification-gate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: messageText,
+              history: historyForGate,
+              attachments: currentAtts.map((a) => ({ name: a.name })),
+              askedQuestions: askedQuestionsList,
+              answeredQuestions: answeredQuestionsMap,
+              detectedInfo: detectedInfoMap,
+              strictness: clarificationSettings.strictness,
+            }),
+          });
+
+          if (res.ok) {
+            decision = await res.json();
+          }
+        } catch (gateErr) {
+          console.warn('Clarification gate check error, proceeding safely:', gateErr);
+        } finally {
+          setIsCheckingGate(false);
+        }
+
+        // OUTCOME C: REDIRECT (invalid, empty, or gibberish input)
+        if (decision && decision.decision === 'REDIRECT') {
+          setIsSendLocked(false);
+          const redirectText =
+            decision.redirect_message ||
+            'Hello! What would you like to build, write, or explore? For example, ask me to create a web app, write a business plan, or design an AI architecture.';
+
+          const aiRedirectMsg: ChatMessage = {
+            id: `ai-redirect-${Date.now()}`,
+            sender: 'ai',
+            text: redirectText,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          };
+
+          setChatThreads((prev) => {
+            const existing = prev[targetTopic] || {
+              id: `thread-${Date.now()}`,
+              title: targetTopic,
+              promptBanner: messageText,
+              messages: [],
+            };
+            return {
+              ...prev,
+              [targetTopic]: {
+                ...existing,
+                messages: [...existing.messages, userMessage, aiRedirectMsg],
+              },
+            };
+          });
+          return;
+        }
+
+        // OUTCOME B: ASK (Missing critical details for complex creation tasks)
+        if (decision && decision.decision === 'ASK' && decision.questions && decision.questions.length > 0) {
+          setIsSendLocked(false);
+
+          // Track asked questions so the exact same question is never repeated
+          decision.questions.forEach((q) => {
+            if (!askedQuestionsList.includes(q.question)) {
+              setAskedQuestionsList((prev) => [...prev, q.question]);
+            }
+          });
+
+          setPendingClarificationDecision(decision);
+
+          const clarifyCardMsg: ChatMessage = {
+            id: `ai-clarify-${Date.now()}`,
+            sender: 'ai',
+            text: '',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            clarificationDecision: decision,
+          };
+
+          setChatThreads((prev) => {
+            const existing = prev[targetTopic] || {
+              id: `thread-${Date.now()}`,
+              title: targetTopic,
+              promptBanner: messageText,
+              messages: [],
+            };
+            return {
+              ...prev,
+              [targetTopic]: {
+                ...existing,
+                messages: [...existing.messages, userMessage, clarifyCardMsg],
+              },
+            };
+          });
+          return;
+        }
+
+        // OUTCOME A: PROCEED (Valid and clear task, simple question, or fallback)
+        const aiMsgId = `ai-${Date.now()}`;
+        const aiPlaceholder: ChatMessage = {
+          id: aiMsgId,
+          sender: 'ai',
+          text: '',
+          isStreaming: true,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
-        return {
-          ...prev,
-          [activeTopic]: {
-            ...existing,
-            messages: [...existing.messages, userMessage, aiFirstQMsg],
-          },
-        };
-      });
 
-      pendingVaguePromptRef.current = messageText;
-      collectedAnswersRef.current = {};
-      setPromptQuestionQueue(DISCOVERY_QUESTIONS);
-      setPromptQuestionIdx(0);
-      setIsSendLocked(false);
+        setChatThreads((prev) => {
+          const existing = prev[targetTopic] || {
+            id: `thread-${Date.now()}`,
+            title: targetTopic,
+            promptBanner: messageText,
+            messages: [],
+          };
+          return {
+            ...prev,
+            [targetTopic]: {
+              ...existing,
+              messages: [...existing.messages, userMessage, aiPlaceholder],
+            },
+          };
+        });
+
+        startGeminiStream(targetTopic, aiMsgId, messageText, currentAtts);
+      })();
       return;
     }
 
-    // Standard flow for specific requests: add user message & AI placeholder and start streaming
+    // Standard flow when clarification is toggled OFF: immediately PROCEED
     setIsSendLocked(true);
     const aiMsgId = `ai-${Date.now()}`;
-
     const aiPlaceholder: ChatMessage = {
       id: aiMsgId,
       sender: 'ai',
@@ -3478,58 +3942,45 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
     };
 
     setChatThreads((prev) => {
-      const existing = prev[activeTopic] || {
+      const existing = prev[targetTopic] || {
         id: `thread-${Date.now()}`,
-        title: activeTopic,
+        title: targetTopic,
         promptBanner: messageText,
         messages: [],
       };
       return {
         ...prev,
-        [activeTopic]: {
+        [targetTopic]: {
           ...existing,
           messages: [...existing.messages, userMessage, aiPlaceholder],
         },
       };
     });
 
-    startGeminiStream(activeTopic, aiMsgId, messageText, currentAtts);
+    startGeminiStream(targetTopic, aiMsgId, messageText, currentAtts);
   };
 
   const handleSelectRecentChat = (topic: string) => {
+    if (!currentUser || currentUser.isAnonymous) {
+      onOpenLogin?.();
+      return;
+    }
     setActiveTopic(topic);
     if (onSelectRecentTopic) onSelectRecentTopic(topic);
     setIsMobileSidebarOpen(false);
   };
 
   const handleNewChat = () => {
+    if (!currentUser || currentUser.isAnonymous) {
+      onOpenLogin?.();
+      return;
+    }
     const newId = `Chat ${Object.keys(chatThreads).length + 1}`;
     const newThread: ChatThread = {
       id: `thread-${Date.now()}`,
       title: newId,
       promptBanner: 'Start a new conversation or ask anything...',
-      messages: [
-        {
-          id: `welcome-${Date.now()}`,
-          sender: 'ai',
-          text: 'What would you like to build or explore today?',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          structuredContent: {
-            mainTitle: { white: 'New', red: 'Session' },
-            intro: 'Ask anything to generate layout architectures, copy, or Tailwind design systems.',
-            sections: [
-              {
-                title: 'Quick Suggestions',
-                bullets: [
-                  'Design an interactive landing page for hypercar telemetry',
-                  'Create dark-mode design tokens with glowing red accents',
-                  'Generate responsive Tailwind component cards',
-                ],
-              },
-            ],
-          },
-        },
-      ],
+      messages: [],
     };
 
     setChatThreads((prev) => ({
@@ -3537,6 +3988,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
       ...prev,
     }));
     setActiveTopic(newId);
+    if (onSelectRecentTopic) onSelectRecentTopic(newId);
     setIsMobileSidebarOpen(false);
   };
 
@@ -3718,6 +4170,8 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
   if (!isOpen) return null;
 
+  const isLight = themeMode === 'light';
+
   return (
     <AnimatePresence>
       <motion.div
@@ -3725,20 +4179,24 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.98 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className="fixed inset-0 z-[10000] bg-black flex overflow-hidden text-white font-sans select-none"
+        className={`fixed inset-0 z-[10000] flex overflow-hidden font-sans select-none transition-colors duration-300 ${
+          isLight ? 'bg-[#eef2f7] text-zinc-900 chat-theme-light' : 'bg-[#090d16] text-white'
+        }`}
       >
-        {/* Background Atmospheric Red Nebulas */}
-        <div className="absolute top-0 right-0 w-[550px] h-[550px] bg-[#ff1828]/12 rounded-full blur-[140px] pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 w-[600px] h-[500px] bg-[#ff1828]/10 rounded-full blur-[160px] pointer-events-none" />
-        <div className="absolute top-1/2 left-0 w-[400px] h-[400px] bg-[#ff1828]/8 rounded-full blur-[130px] pointer-events-none" />
+        {/* Background Atmospheric Candy Blue Nebulas */}
+        <div className="absolute top-0 right-0 w-[550px] h-[550px] bg-[#00a6ff]/10 rounded-full blur-[140px] pointer-events-none" />
+        <div className="absolute bottom-0 left-1/3 w-[600px] h-[500px] bg-[#00a6ff]/8 rounded-full blur-[160px] pointer-events-none" />
+        <div className="absolute top-1/2 left-0 w-[400px] h-[400px] bg-[#00a6ff]/6 rounded-full blur-[130px] pointer-events-none" />
 
         {/* ------------------------------------------------------------- */}
-        {/* LEFT SIDEBAR: Exact BMW ///M styling from reference image */}
+        {/* LEFT SIDEBAR: Neumorphic Styling with Candy Blue Accents */}
         {/* ------------------------------------------------------------- */}
         <div
-          className={`fixed inset-y-0 left-0 z-50 w-72 sm:w-80 bg-black/95 md:bg-black/90 md:static md:translate-x-0 transition-transform duration-300 flex flex-col justify-between p-5 border-r border-[#ff1828]/25 backdrop-blur-xl ${
-            isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-          }`}
+          className={`fixed inset-y-0 left-0 z-50 w-72 sm:w-80 md:static md:translate-x-0 transition-all duration-300 flex flex-col justify-between p-5 border-r backdrop-blur-xl ${
+            isLight
+              ? 'bg-[#eef2f7] border-zinc-200/90 shadow-[4px_0_16px_rgba(166,178,198,0.3)] text-zinc-800'
+              : 'bg-[#0d121c]/95 md:bg-[#0d121c]/90 border-[#00a6ff]/25 text-white'
+          } ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
         >
           {/* Top Fixed Section: Logo + New Chat + Navigation */}
           <div className="shrink-0 space-y-4">
@@ -3749,101 +4207,168 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                 <div className="flex items-center gap-1.5 -skew-x-[18deg]">
                   <span className="w-2.5 h-7 bg-[#0082CA] rounded-[1px] shadow-[0_0_10px_rgba(0,130,202,0.7)]" />
                   <span className="w-2.5 h-7 bg-[#17205a] rounded-[1px]" />
-                  <span className="w-2.5 h-7 bg-[#E21B23] rounded-[1px] shadow-[0_0_14px_rgba(226,27,35,0.9)]" />
+                  <span className="w-2.5 h-7 bg-[#00a6ff] rounded-[1px] shadow-[0_0_14px_rgba(0,166,255,0.9)]" />
                 </div>
-                <span className="text-white text-3xl font-black italic tracking-tighter ml-1">
+                <span className={`text-3xl font-black italic tracking-tighter ml-1 ${isLight ? 'text-zinc-900' : 'text-white'}`}>
                   M
                 </span>
               </div>
 
-              {/* Mobile Close X */}
-              <button
-                type="button"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className="md:hidden p-1.5 rounded-lg text-zinc-400 hover:text-white"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* + New Chat Button with red neon rim */}
-            <button
-              type="button"
-              onClick={handleNewChat}
-              className="w-full py-3 px-4 rounded-[20px] bg-[#0d0204] border-[1.5px] border-[#ff1828] text-white font-medium text-[15px] flex items-center justify-between shadow-[0_0_18px_rgba(255,24,40,0.6)] hover:shadow-[0_0_26px_rgba(255,24,40,0.85)] transition-all cursor-pointer active:scale-98 group"
-            >
-              <div className="flex items-center gap-3">
-                <Plus size={19} className="text-white group-hover:rotate-90 transition-transform" />
-                <span className="text-white tracking-wide">New Chat</span>
+              {/* Mobile Right Controls: Theme Toggle & Close X */}
+              <div className="flex items-center gap-1.5 md:hidden">
+                <ThemeToggle showLabel={false} />
+                <button
+                  type="button"
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                  className={`p-1.5 rounded-lg ${isLight ? 'text-zinc-600 hover:text-zinc-900' : 'text-zinc-400 hover:text-white'}`}
+                >
+                  <X size={20} />
+                </button>
               </div>
-              <ChevronRight size={18} className="text-[#ff1828] font-bold group-hover:translate-x-0.5 transition-transform" />
-            </button>
-
-            {/* Standard Navigation */}
-            <div className="space-y-1.5 pt-0.5 text-[15px] font-normal text-white">
-              <button
-                type="button"
-                className="w-full px-3 py-2 rounded-xl bg-white/[0.04] text-left flex items-center gap-3.5 text-white transition-all cursor-pointer"
-              >
-                <MessageSquare size={19} strokeWidth={1.8} className="text-white" />
-                <span className="tracking-wide">Chat</span>
-              </button>
-              <button
-                type="button"
-                className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.04] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
-              >
-                <LayoutGrid size={19} strokeWidth={1.8} className="text-zinc-400" />
-                <span className="tracking-wide">Explore GPTs</span>
-              </button>
-              <button
-                type="button"
-                className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.04] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
-              >
-                <Folder size={19} strokeWidth={1.8} className="text-zinc-400" />
-                <span className="tracking-wide">Library</span>
-              </button>
             </div>
           </div>
 
-          {/* ONLY RECENT SECTION SCROLLABLE: Clean list without glowing highlight div */}
-          <div className="flex-1 min-h-0 flex flex-col pt-3">
-            <span className="text-[13px] font-normal text-zinc-500 px-3 tracking-wide mb-2 shrink-0">
-              Recent
-            </span>
+          {/* GUEST MODE: Sign In Required Box */}
+          {!currentUser || currentUser.isAnonymous ? (
+            <div className="flex-1 min-h-0 flex flex-col items-center justify-center p-4 text-center my-auto">
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-[#00a6ff] mb-3 ${
+                isLight
+                  ? 'bg-white border border-zinc-200/90 shadow-[-3px_-3px_8px_rgba(255,255,255,0.9),3px_3px_8px_rgba(166,178,198,0.35)]'
+                  : 'bg-[#090d16] border border-[#00a6ff]/50 shadow-[0_0_20px_rgba(0,166,255,0.35)]'
+              }`}>
+                <Lock size={24} />
+              </div>
+              <h3
+                className={`text-base font-bold tracking-tight mb-1.5 ${isLight ? 'text-zinc-900' : 'text-white'}`}
+                style={{ fontFamily: "'Syne', sans-serif" }}
+              >
+                Sign in required
+              </h3>
+              <p className={`text-xs leading-relaxed max-w-[210px] mb-5 ${isLight ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                Sign in to access your chats, projects and memory.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileSidebarOpen(false);
+                  handleOpenLogin();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#00a6ff] hover:bg-[#0094e6] text-white text-xs font-bold transition-all shadow-[0_0_15px_rgba(0,166,255,0.5)] cursor-pointer active:scale-95"
+              >
+                Sign In
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Authenticated Mode: Top Section with + New Chat + Navigation */}
+              <div className="shrink-0 space-y-4 pt-3">
+                {/* + New Chat Button with red neon rim */}
+                <button
+                  type="button"
+                  onClick={handleNewChat}
+                  className="w-full py-3 px-4 rounded-[20px] bg-[#0d0204] border-[1.5px] border-[#00a6ff] text-white font-medium text-[15px] flex items-center justify-between shadow-[0_0_18px_rgba(0, 166, 255,0.6)] hover:shadow-[0_0_26px_rgba(0, 166, 255,0.85)] transition-all cursor-pointer active:scale-98 group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Plus size={19} className="text-white group-hover:rotate-90 transition-transform" />
+                    <span className="text-white tracking-wide">New Chat</span>
+                  </div>
+                  <ChevronRight size={18} className="text-[#00a6ff] font-bold group-hover:translate-x-0.5 transition-transform" />
+                </button>
 
-            {/* Scrollable container for recent items */}
-            <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
-              {Object.keys(chatThreads).length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs text-zinc-500">
-                  No chats yet. Start a new conversation!
-                </div>
-              ) : (
-                Object.keys(chatThreads).map((topic) => (
+                {/* Standard Navigation */}
+                <div className="space-y-1.5 pt-0.5 text-[15px] font-normal text-white">
                   <button
-                    key={topic}
                     type="button"
-                    onClick={() => handleSelectRecentChat(topic)}
-                    className={`w-full px-3.5 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] border ${
-                      topic === activeTopic
-                        ? 'bg-white/[0.08] text-white border-white/15'
-                        : 'text-zinc-200 hover:text-white border-transparent'
-                    } group`}
+                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] text-left flex items-center gap-3.5 text-white transition-all cursor-pointer"
                   >
-                    <div className="flex items-center gap-3 truncate">
-                      <MessageSquare
-                        size={17}
-                        strokeWidth={1.8}
-                        className="text-zinc-400 group-hover:text-white shrink-0"
-                      />
-                      <span className="truncate text-[14px] text-white font-normal">
-                        {topic}
-                      </span>
-                    </div>
+                    <MessageSquare size={19} strokeWidth={1.8} className="text-white" />
+                    <span className="tracking-wide">Chat</span>
                   </button>
-                ))
-              )}
-            </div>
-          </div>
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.04] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
+                  >
+                    <LayoutGrid size={19} strokeWidth={1.8} className="text-zinc-400" />
+                    <span className="tracking-wide">Explore GPTs</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.04] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
+                  >
+                    <Folder size={19} strokeWidth={1.8} className="text-zinc-400" />
+                    <span className="tracking-wide">Library</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* ONLY RECENT SECTION SCROLLABLE: Authenticated user's real Firestore chats */}
+              <div className="flex-1 min-h-0 flex flex-col pt-3">
+                <span className="text-[13px] font-normal text-zinc-500 px-3 tracking-wide mb-2 shrink-0">
+                  Recent
+                </span>
+
+                {/* Scrollable container for recent items */}
+                <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
+                  {Object.keys(chatThreads).length === 0 ? (
+                    <div className="px-3 py-6 text-center text-xs text-zinc-500">
+                      No saved chats yet. Start a new conversation!
+                    </div>
+                  ) : (
+                    Object.values(chatThreads).map((thread) => {
+                      const topic = thread.title || thread.id;
+                      return (
+                        <div
+                          key={thread.id || topic}
+                          className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] border ${
+                            topic === activeTopic
+                              ? 'bg-white/[0.08] text-white border-white/15'
+                              : 'text-zinc-200 hover:text-white border-transparent'
+                          } group`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleSelectRecentChat(topic)}
+                            className="flex items-center gap-3 truncate text-left flex-1 min-w-0"
+                          >
+                            <MessageSquare
+                              size={17}
+                              strokeWidth={1.8}
+                              className="text-zinc-400 group-hover:text-white shrink-0"
+                            />
+                            <span className="truncate text-[14px] text-white font-normal">
+                              {topic}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (currentUser?.uid && thread.id) {
+                                await deleteChatThreadFromFirestore(thread.id, currentUser.uid);
+                                setChatThreads((prev) => {
+                                  const next = { ...prev };
+                                  delete next[topic];
+                                  return next;
+                                });
+                                if (activeTopic === topic) {
+                                  const remaining = Object.keys(chatThreads).filter((k) => k !== topic);
+                                  setActiveTopic(remaining[0] || '');
+                                }
+                              }
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-zinc-500 hover:text-red-400 transition-opacity ml-1 shrink-0"
+                            title="Delete chat"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Bottom Fixed Section: User Profile + Sign Out / Sign In + Return to BMW Button */}
           <div className="shrink-0 space-y-3 pt-3 border-t border-zinc-900">
@@ -3861,11 +4386,11 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             {currentUser && !currentUser.isAnonymous ? (
               <div className="flex items-center justify-between px-2.5 py-2 select-none rounded-xl bg-white/[0.04] border border-white/10">
                 <div className="flex items-center gap-2.5 min-w-0 truncate">
-                  <div className="w-9 h-9 rounded-full bg-[#0e0103] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_12px_rgba(255,24,40,0.6)] shrink-0 overflow-hidden">
+                  <div className="w-9 h-9 rounded-full bg-[#0e0103] border-[1.5px] border-[#00a6ff] flex items-center justify-center text-[#00a6ff] shadow-[0_0_12px_rgba(0, 166, 255,0.6)] shrink-0 overflow-hidden">
                     {currentUser?.photoURL ? (
                       <img src={currentUser.photoURL} alt="Profile" className="w-full h-full object-cover" />
                     ) : (
-                      <UserIcon size={17} className="fill-[#ff1828] text-[#ff1828]" />
+                      <UserIcon size={17} className="fill-[#00a6ff] text-[#00a6ff]" />
                     )}
                   </div>
                   <div className="flex flex-col truncate">
@@ -3895,19 +4420,25 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               </div>
             ) : (
               <div
-                onClick={onOpenLogin}
-                className="flex items-center justify-between px-3 py-2 select-none cursor-pointer hover:bg-white/5 bg-white/[0.03] border border-white/10 rounded-xl transition-colors"
+                onClick={handleOpenLogin}
+                className={`flex items-center justify-between px-3 py-2 select-none cursor-pointer border rounded-xl transition-colors ${
+                  isLight
+                    ? 'hover:bg-black/5 bg-white/60 border-zinc-200/90 shadow-sm'
+                    : 'hover:bg-white/5 bg-white/[0.03] border-white/10'
+                }`}
                 title="Click to sign in"
               >
                 <div className="flex items-center gap-2.5 truncate">
-                  <div className="w-9 h-9 rounded-full bg-[#0e0103] border-[1.5px] border-zinc-700 flex items-center justify-center text-zinc-400 shrink-0">
+                  <div className={`w-9 h-9 rounded-full border-[1.5px] flex items-center justify-center shrink-0 ${
+                    isLight ? 'bg-white border-zinc-300 text-zinc-600' : 'bg-[#0e0103] border-zinc-700 text-zinc-400'
+                  }`}>
                     <UserIcon size={16} />
                   </div>
                   <div className="flex flex-col truncate">
-                    <span className="text-[13px] font-semibold text-white leading-tight truncate">
+                    <span className={`text-[13px] font-semibold leading-tight truncate ${isLight ? 'text-zinc-900' : 'text-white'}`}>
                       Guest User
                     </span>
-                    <span className="text-[11px] text-zinc-400 truncate">
+                    <span className={`text-[11px] truncate ${isLight ? 'text-zinc-500' : 'text-zinc-400'}`}>
                       Session Active
                     </span>
                   </div>
@@ -3918,9 +4449,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenLogin?.();
+                    handleOpenLogin();
                   }}
-                  className="px-3 py-1.5 rounded-lg bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(255,24,40,0.4)] cursor-pointer shrink-0"
+                  className="px-3 py-1.5 rounded-lg bg-[#00a6ff] hover:bg-[#0094e6] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(0,166,255,0.4)] cursor-pointer shrink-0"
                 >
                   Sign In
                 </button>
@@ -3942,12 +4473,20 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
         {/* ------------------------------------------------------------- */}
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">
           {/* Top Header Row for Desktop & Mobile */}
-          <div className="flex items-center justify-between px-4 sm:px-8 py-3 border-b border-white/10 bg-black/60 backdrop-blur-md z-30">
+          <div className={`flex items-center justify-between px-4 sm:px-8 py-3 border-b z-30 transition-colors ${
+            isLight
+              ? 'bg-[#eef2f7]/90 border-zinc-200/80 backdrop-blur-md text-zinc-900 shadow-[0_2px_8px_rgba(166,178,198,0.2)]'
+              : 'bg-black/60 border-white/10 backdrop-blur-md text-white'
+          }`}>
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => setIsMobileSidebarOpen(true)}
-                className="md:hidden p-2 rounded-xl bg-zinc-900 text-white flex items-center gap-2 text-sm"
+                className={`md:hidden p-2 rounded-xl flex items-center gap-2 text-sm ${
+                  isLight
+                    ? 'bg-white text-zinc-800 border border-zinc-200 shadow-sm'
+                    : 'bg-zinc-900 text-white'
+                }`}
               >
                 <Menu size={18} />
                 <span>Menu</span>
@@ -3955,10 +4494,125 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             </div>
 
             <div className="flex items-center gap-2.5">
+              {/* Animated Light/Dark Mode Switcher */}
+              <ThemeToggle showLabel={true} />
+
+              {/* Clarification Gate Settings Popover */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsClarificationMenuOpen((v) => !v)}
+                  className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-semibold border transition-all cursor-pointer ${
+                    clarificationSettings.enabled
+                      ? isLight
+                        ? 'bg-white hover:bg-zinc-50 text-zinc-800 border-zinc-200 shadow-sm'
+                        : 'bg-white/10 hover:bg-white/15 text-white border-white/15 shadow-sm'
+                      : 'bg-white/5 hover:bg-white/10 text-zinc-400 border-white/5'
+                  }`}
+                  title="Clarifying Questions Settings"
+                >
+                  <Sliders size={13} className={clarificationSettings.enabled ? 'text-[#00a6ff]' : 'text-zinc-500'} />
+                  <span className="hidden sm:inline">
+                    {clarificationSettings.enabled
+                      ? `Clarifications: ${clarificationSettings.strictness.charAt(0).toUpperCase() + clarificationSettings.strictness.slice(1)}`
+                      : 'Clarifications: Off'}
+                  </span>
+                  <ChevronDown size={12} className="opacity-70" />
+                </button>
+
+                <AnimatePresence>
+                  {isClarificationMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 4, scale: 0.96 }}
+                      transition={{ duration: 0.15 }}
+                      className={`absolute right-0 top-full mt-2 w-72 rounded-2xl backdrop-blur-2xl border p-3.5 z-50 ${
+                        isLight
+                          ? 'bg-white/95 text-zinc-900 border-zinc-200/90 shadow-[0_20px_50px_rgba(0,0,0,0.15),0_0_30px_rgba(0,166,255,0.1)]'
+                          : 'bg-[#0b1019]/95 text-white border-[#00a6ff]/40 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_30px_rgba(0,166,255,0.2)]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between pb-2.5 border-b border-zinc-200/20 mb-3">
+                        <div className="flex items-center gap-2">
+                          <Sliders size={14} className="text-[#00a6ff]" />
+                          <span className="text-xs font-bold uppercase tracking-wider">
+                            Clarification Gate
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsClarificationMenuOpen(false)}
+                          className="text-zinc-400 hover:text-zinc-600 transition-colors cursor-pointer"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+
+                      {/* Enable/Disable Toggle */}
+                      <div className="flex items-center justify-between py-2 border-b border-zinc-200/10 mb-3">
+                        <div>
+                          <div className="text-xs font-semibold">Ask clarifying questions</div>
+                          <div className="text-[10px] text-zinc-400">Ask questions before generating major tasks</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateClarificationSettings({ enabled: !clarificationSettings.enabled })
+                          }
+                          className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
+                            clarificationSettings.enabled ? 'bg-[#00a6ff]' : 'bg-zinc-700'
+                          }`}
+                        >
+                          <span
+                            className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.75 transition-transform ${
+                              clarificationSettings.enabled ? 'left-5.5' : 'left-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Strictness Selector */}
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] font-semibold">Question Strictness:</div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {(['minimal', 'balanced', 'thorough'] as const).map((lvl) => (
+                            <button
+                              key={lvl}
+                              type="button"
+                              disabled={!clarificationSettings.enabled}
+                              onClick={() => updateClarificationSettings({ strictness: lvl })}
+                              className={`px-2 py-1.5 rounded-xl text-[11px] font-semibold transition-all capitalize cursor-pointer border ${
+                                clarificationSettings.strictness === lvl && clarificationSettings.enabled
+                                  ? 'bg-[#00a6ff] text-white border-[#00a6ff] shadow-[0_0_10px_rgba(0,166,255,0.5)]'
+                                  : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-800 border-zinc-200 disabled:opacity-40'
+                              }`}
+                            >
+                              {lvl}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 pt-1 leading-tight">
+                          {clarificationSettings.strictness === 'minimal'
+                            ? 'Minimal: Asks 0-1 questions, only when impossible to proceed.'
+                            : clarificationSettings.strictness === 'balanced'
+                            ? 'Balanced (Default): Asks 1-3 high-impact questions for ambiguous tasks.'
+                            : 'Thorough: Asks 2-4 comprehensive questions before generating.'}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <button
                 type="button"
                 onClick={onClose}
-                className="p-2 rounded-xl bg-zinc-900 text-zinc-300 hover:text-white flex items-center gap-1.5 text-xs border border-white/10 hover:border-white/20 transition-all cursor-pointer"
+                className={`p-2 rounded-xl flex items-center gap-1.5 text-xs transition-all cursor-pointer border ${
+                  isLight
+                    ? 'bg-white text-zinc-800 border-zinc-200/90 shadow-sm hover:bg-zinc-100'
+                    : 'bg-zinc-900 text-zinc-300 hover:text-white border-white/10 hover:border-white/20'
+                }`}
                 title="Back to BMW Reveal Screen"
               >
                 <ArrowLeft size={15} />
@@ -3993,7 +4647,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             {/* Conversation Messages or Welcome State */}
             {(!currentThread || !currentThread.messages || currentThread.messages.length === 0) ? (
               <div className="h-full min-h-[420px] flex flex-col items-center justify-center text-center px-4 max-w-xl mx-auto select-none">
-                <div className="w-16 h-16 rounded-3xl bg-[#0e0103] border-[1.5px] border-[#ff1828]/60 flex items-center justify-center text-[#ff1828] shadow-[0_0_30px_rgba(255,24,40,0.5),inset_0_0_15px_rgba(255,24,40,0.3)] mb-4">
+                <div className="w-16 h-16 rounded-3xl bg-[#0e0103] border-[1.5px] border-[#00a6ff]/60 flex items-center justify-center text-[#00a6ff] shadow-[0_0_30px_rgba(0, 166, 255,0.5),inset_0_0_15px_rgba(0, 166, 255,0.3)] mb-4">
                   <Sparkles size={28} className="animate-pulse" />
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight mb-2 uppercase" style={{ fontFamily: "'Syne', sans-serif" }}>
@@ -4034,9 +4688,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                             ) : file.type?.startsWith('video/') ? (
                               <div
                                 key={file.id}
-                                className="flex items-center gap-2 bg-zinc-900 border border-[#ff1828]/50 rounded-xl px-3 py-1.5 text-xs text-white shadow-md select-none shrink-0"
+                                className="flex items-center gap-2 bg-zinc-900 border border-[#00a6ff]/50 rounded-xl px-3 py-1.5 text-xs text-white shadow-md select-none shrink-0"
                               >
-                                <div className="w-5 h-5 rounded-full bg-[#ff1828] flex items-center justify-center text-white shrink-0">
+                                <div className="w-5 h-5 rounded-full bg-[#00a6ff] flex items-center justify-center text-white shrink-0">
                                   <div className="w-0 h-0 border-t-[3.5px] border-t-transparent border-b-[3.5px] border-b-transparent border-l-[6px] border-l-white ml-0.5" />
                                 </div>
                                 <span className="max-w-[140px] truncate font-semibold">{file.name}</span>
@@ -4060,7 +4714,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                           <textarea
                             value={editingUserText}
                             onChange={(e) => setEditingUserText(e.target.value)}
-                            className="w-full bg-black/70 border border-[#ff1828]/60 rounded-xl p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#ff1828] resize-none"
+                            className="w-full bg-black/70 border border-[#00a6ff]/60 rounded-xl p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-[#00a6ff] resize-none"
                             rows={3}
                             autoFocus
                           />
@@ -4075,7 +4729,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                             <button
                               type="button"
                               onClick={() => handleSaveEditUser(message.id)}
-                              className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs bg-[#ff1828] hover:bg-[#e01423] text-white font-medium shadow-[0_0_10px_rgba(255,24,40,0.5)] transition-colors cursor-pointer"
+                              className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs bg-[#00a6ff] hover:bg-[#0094e6] text-white font-medium shadow-[0_0_10px_rgba(0, 166, 255,0.5)] transition-colors cursor-pointer"
                             >
                               <Check size={12} />
                               <span>Save</span>
@@ -4180,6 +4834,20 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                     </div>
                   )}
 
+                  {/* Dynamic Clarification Questions Card IN CHAT */}
+                  {message.clarificationDecision && (
+                    <div className="pt-1 pb-2">
+                      <ClarificationQuestionsCard
+                        decision={message.clarificationDecision}
+                        disabled={isSendLocked || isAiTyping}
+                        onSubmitAnswers={(answers) =>
+                          handleClarificationSubmit(message.clarificationDecision!, answers)
+                        }
+                        onSkip={() => handleClarificationSkip(message.clarificationDecision!)}
+                      />
+                    </div>
+                  )}
+
                   {/* Loaded Answer Content with typing animation and tactile vibration */}
                   {message.text && (
                     <motion.div
@@ -4194,8 +4862,8 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                       className="space-y-6"
                       onClick={() => handleSkipTyping(message.id)}
                     >
-                      {/* While typing, display progressively with animated blinking cursor & immediate scrollable code box */}
-                      {typingAnimationMsgId === message.id ? (
+                      {/* While typing or streaming, display progressively with animated blinking cursor & immediate scrollable code box */}
+                      {(message.isStreaming || typingAnimationMsgId === message.id) ? (
                         <LiveMessageStreamRenderer
                           rawText={message.text}
                           isStreaming={true}
@@ -4208,32 +4876,14 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                         />
                       ) : (
                         <>
-                          {/* 3 to 4 topic-related visual images ONLY for important/valid messages matching the reply */}
-                          {(() => {
-                            const prevUserMsg = (currentThread?.messages || [])
-                              .slice(0, (currentThread?.messages || []).findIndex((m) => m.id === message.id))
-                              .reverse()
-                              .find((m) => m.sender === 'user');
-                            const userPromptText = prevUserMsg?.text;
-                            const shouldShow = shouldShowReferenceImagesForMessage(
-                              message,
-                              currentThread?.promptBanner,
-                              userPromptText
-                            );
-                            if (!shouldShow) return null;
-
-                            const matchedQuery = extractImageSearchQueryFromMessage(
-                              message,
-                              currentThread?.promptBanner,
-                              userPromptText
-                            );
-
-                            return (
-                              <MessageTopImageGallery
-                                promptOrTopic={matchedQuery}
-                              />
-                            );
-                          })()}
+                          {/* AI Image Planner Gallery (Strictly AI Planned, No Regex) */}
+                          {message.imagePlan && message.imagePlan.mode !== 'NONE' && (
+                            <MessageTopImageGallery
+                              subjects={message.imagePlan.subjects}
+                              mode={message.imagePlan.mode}
+                              shortReplyText={message.imagePlan.shortReplyText}
+                            />
+                          )}
 
                           {/* Clean White Main Title (slightly larger than sub-heading, all in pure white) */}
                           {message.structuredContent?.mainTitle && (
@@ -4278,7 +4928,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                     <div key={sIdx} className="space-y-3.5 pt-2">
                       {/* Section Title with crimson accent pill */}
                       <div className="flex items-center gap-2.5">
-                        <div className="w-1.5 h-5 bg-[#ff1828] rounded-full" />
+                        <div className="w-1.5 h-5 bg-[#00a6ff] rounded-full" />
                         <h3
                           className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-wide font-luxury-serif"
                           style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 800 }}
@@ -4306,7 +4956,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                               className="flex items-start gap-3.5 text-base sm:text-lg md:text-xl text-white font-bold group font-luxury-serif tracking-[0.012em]"
                               style={{ fontFamily: "'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif", fontWeight: 750 }}
                             >
-                              <span className="w-2 h-2 rounded-full bg-[#ff1828] mt-2.5 shrink-0 group-hover:scale-125 transition-transform" />
+                              <span className="w-2 h-2 rounded-full bg-[#00a6ff] mt-2.5 shrink-0 group-hover:scale-125 transition-transform" />
                               <span className="leading-relaxed text-white font-bold">{renderFormattedBoldText(bullet)}</span>
                             </li>
                           ))}
@@ -4431,7 +5081,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                           }
                           className={`w-7 h-7 rounded-lg border flex items-center justify-center transition-all cursor-pointer active:scale-90 ${
                             exportMenuMsgId === message.id
-                              ? 'bg-[#ff1828]/25 border-[#ff1828] text-white'
+                              ? 'bg-[#00a6ff]/25 border-[#00a6ff] text-white'
                               : 'bg-white/5 hover:bg-white/15 border-white/10 hover:border-white/20 text-zinc-400 hover:text-white'
                           }`}
                           title="Export response"
@@ -4447,11 +5097,11 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                               initial={{ opacity: 0, y: 8, scale: 0.95 }}
                               animate={{ opacity: 1, y: 0, scale: 1 }}
                               exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                              className="absolute left-0 bottom-full mb-2 w-64 rounded-2xl bg-[#120406]/95 backdrop-blur-xl border border-[#ff1828]/40 shadow-[0_20px_45px_rgba(0,0,0,0.85),0_0_20px_rgba(255,24,40,0.25)] p-2 z-50 text-xs"
+                              className="absolute left-0 bottom-full mb-2 w-64 rounded-2xl bg-[#120406]/95 backdrop-blur-xl border border-[#00a6ff]/40 shadow-[0_20px_45px_rgba(0,0,0,0.85),0_0_20px_rgba(0, 166, 255,0.25)] p-2 z-50 text-xs"
                             >
                               <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400 border-b border-white/10 mb-1 flex items-center justify-between">
                                 <span>Export Answer As</span>
-                                <span className="text-[#ff1828]">5 Formats</span>
+                                <span className="text-[#00a6ff]">5 Formats</span>
                               </div>
 
                               {/* PDF Option */}
@@ -4542,6 +5192,17 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               );
             })
           )}
+
+          {isCheckingGate && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-zinc-900/95 border border-[#00a6ff]/40 w-fit text-xs text-zinc-200 font-bold mb-3 shadow-[0_0_20px_rgba(0, 166, 255,0.15)]"
+            >
+              <Loader2 size={14} className="animate-spin text-[#00a6ff]" />
+              <span className="tracking-wide">Checking your request...</span>
+            </motion.div>
+          )}
           </div>
 
           {/* Scroll to bottom button when user scrolled up */}
@@ -4631,9 +5292,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                               processChatFiles(e.dataTransfer.files);
                             }
                           }}
-                          className={`relative rounded-[28px] sm:rounded-[32px] bg-white text-zinc-900 px-5 pt-4 pb-3 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(255,24,40,0.25)] border transition-all ${
+                          className={`relative rounded-[28px] sm:rounded-[32px] bg-white text-zinc-900 px-5 pt-4 pb-3 shadow-[0_20px_50px_rgba(0,0,0,0.9),0_0_35px_rgba(0, 166, 255,0.25)] border transition-all ${
                             isDraggingOver
-                              ? 'border-[#ff1828] ring-2 ring-[#ff1828]/30'
+                              ? 'border-[#00a6ff] ring-2 ring-[#00a6ff]/30'
                               : 'border-white/90'
                           }`}
                         >
@@ -4670,7 +5331,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                           e.stopPropagation();
                                           removeChatAttachment(file.id);
                                         }}
-                                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/75 hover:bg-[#ff1828] text-white flex items-center justify-center transition-colors cursor-pointer shadow-sm active:scale-90 disabled:opacity-40"
+                                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/75 hover:bg-[#00a6ff] text-white flex items-center justify-center transition-colors cursor-pointer shadow-sm active:scale-90 disabled:opacity-40"
                                         title={`Remove ${file.name}`}
                                         aria-label={`Remove ${file.name}`}
                                       >
@@ -4680,7 +5341,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                   ) : file.type?.startsWith('video/') ? (
                                     /* Video media pill with play indicator and remove button */
                                     <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-300 text-white shadow-md rounded-full px-3.5 py-1.5 text-xs sm:text-sm font-semibold shrink-0 select-none">
-                                      <div className="w-5 h-5 rounded-full bg-[#ff1828] flex items-center justify-center text-white shrink-0">
+                                      <div className="w-5 h-5 rounded-full bg-[#00a6ff] flex items-center justify-center text-white shrink-0">
                                         <div className="w-0 h-0 border-t-[3.5px] border-t-transparent border-b-[3.5px] border-b-transparent border-l-[6px] border-l-white ml-0.5" />
                                       </div>
                                       <span className="max-w-[120px] sm:max-w-[160px] truncate" title={file.name}>
@@ -4735,7 +5396,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                 initial={{ opacity: 0, y: -4 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: -4 }}
-                                className="text-xs text-[#ff1828] font-medium px-1 py-1"
+                                className="text-xs text-[#00a6ff] font-medium px-1 py-1"
                               >
                                 {fileLimitError}
                               </motion.div>
@@ -4771,20 +5432,20 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
 
                               {/* Right: Model Selector + Send Button */}
                               <div className="flex items-center gap-2">
-                                {/* Model Dropdown */}
+                                {/* Model Dropdown - Pure White Style */}
                                 <div className="relative">
                                   <button
                                     type="button"
                                     disabled={isSendLocked || isAiTyping}
                                     onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs sm:text-sm font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white hover:bg-zinc-50 text-zinc-900 border border-zinc-200/90 text-xs sm:text-sm font-semibold transition-all cursor-pointer shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
                                   >
                                     <span>{selectedModel === 'Gemini 2.5' ? 'AI Studio 2.5' : selectedModel}</span>
                                     <ChevronDown size={14} className="text-zinc-500" />
                                   </button>
 
                                   {isModelDropdownOpen && !isSendLocked && !isAiTyping && (
-                                    <div className="absolute bottom-10 right-0 w-36 bg-zinc-900 text-white rounded-xl shadow-xl border border-white/10 p-1 z-50 text-xs">
+                                    <div className="absolute bottom-11 right-0 w-38 bg-white text-zinc-900 rounded-2xl shadow-2xl border border-zinc-200/90 p-1.5 z-50 text-xs space-y-0.5">
                                       {['GPT-4o', 'GPT-4o mini', 'AI Studio 2.5', 'Claude 3.7'].map((model) => (
                                         <button
                                           key={model}
@@ -4793,10 +5454,10 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                             setSelectedModel(model);
                                             setIsModelDropdownOpen(false);
                                           }}
-                                          className={`w-full text-left px-3 py-1.5 rounded-lg transition-colors ${
+                                          className={`w-full text-left px-3 py-2 rounded-xl transition-all font-medium ${
                                             selectedModel === model
-                                              ? 'bg-[#ff1828] text-white'
-                                              : 'hover:bg-white/10 text-zinc-300'
+                                              ? 'bg-[#00a6ff] text-white shadow-md font-semibold'
+                                              : 'hover:bg-zinc-100 text-zinc-700'
                                           }`}
                                         >
                                           {model}
@@ -4806,7 +5467,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                   )}
                                 </div>
 
-                                {/* Red Circular Send Button - Locked immediately on send until completion */}
+                                {/* Candy Blue Circular Send Button */}
                                 <button
                                   type="submit"
                                   disabled={
@@ -4816,7 +5477,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
                                   }
                                   className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
                                     !isSendLocked && !isAiTyping && (inputVal.trim() || chatAttachments.length > 0)
-                                      ? 'bg-[#ff1828] text-white shadow-[0_0_18px_rgba(255,24,40,0.8)] hover:scale-105 cursor-pointer active:scale-95'
+                                      ? 'bg-[#00a6ff] text-white shadow-[0_0_18px_rgba(0,166,255,0.7)] hover:bg-[#0094e6] hover:scale-105 cursor-pointer active:scale-95'
                                       : 'bg-zinc-200 text-zinc-400 cursor-not-allowed opacity-60'
                                   }`}
                                   title={isSendLocked || isAiTyping ? 'Generating response...' : 'Send prompt'}
@@ -4848,9 +5509,9 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               initial={{ opacity: 0, y: 15, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              className="fixed bottom-24 right-6 z-[10001] px-4 py-2.5 rounded-xl bg-[#140306]/95 border border-[#ff1828]/60 shadow-[0_10px_30px_rgba(0,0,0,0.85),0_0_15px_rgba(255,24,40,0.35)] text-white text-xs flex items-center gap-2.5 backdrop-blur-md pointer-events-none"
+              className="fixed bottom-24 right-6 z-[10001] px-4 py-2.5 rounded-xl bg-[#140306]/95 border border-[#00a6ff]/60 shadow-[0_10px_30px_rgba(0,0,0,0.85),0_0_15px_rgba(0, 166, 255,0.35)] text-white text-xs flex items-center gap-2.5 backdrop-blur-md pointer-events-none"
             >
-              <CheckCircle2 size={15} className="text-[#ff1828]" />
+              <CheckCircle2 size={15} className="text-[#00a6ff]" />
               <span className="font-medium tracking-wide">{toastMessage}</span>
             </motion.div>
           )}
@@ -4879,7 +5540,7 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
               showToast('Code saved successfully');
             }}
             onOpenInBrowser={(code) => {
-              openHtmlPreviewInBrowser(code, fullscreenEditor.fileName);
+              setFullscreenWebsite({ html: code, fileName: fullscreenEditor.fileName || 'index.html' });
             }}
           />
         )}
@@ -4904,6 +5565,12 @@ CRITICAL ARCHITECTURE REQUIREMENTS:
             showToast(`Active project: ${project.name}`);
           }}
           showToast={showToast}
+        />
+
+        {/* Firebase Authentication Modal */}
+        <LoginModal
+          isOpen={isInternalLoginOpen}
+          onClose={() => setIsInternalLoginOpen(false)}
         />
       </motion.div>
     </AnimatePresence>

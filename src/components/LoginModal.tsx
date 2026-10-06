@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mail, X, ArrowRight, Loader2, Sparkles, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Mail, X, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { signInWithGoogle, signInWithEmail, signUpWithEmail } from '../firebase';
 
@@ -65,7 +65,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      {/* High z-index (20000) so it always renders above FullScreenChatView (10000) */}
+      <div className="fixed inset-0 z-[20000] flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -75,23 +76,23 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
           className="fixed inset-0 bg-black/85 backdrop-blur-xl"
         />
 
-        {/* Modal Window matching user's Think Creative mockup */}
+        {/* Modal Window matching neumorphic styling with Candy Blue glow */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
           transition={{ duration: 0.28, ease: 'easeOut' }}
-          className="relative w-full max-w-[420px] rounded-[36px] overflow-hidden border border-[#ff1828]/35 bg-[#080204] shadow-[0_0_60px_rgba(255,24,40,0.3),0_20px_60px_rgba(0,0,0,0.9)] z-10 flex flex-col my-auto"
+          className="relative w-full max-w-[420px] rounded-[36px] overflow-hidden border border-[#00a6ff]/40 bg-[#070b12] shadow-[0_0_60px_rgba(0,166,255,0.35),0_20px_60px_rgba(0,0,0,0.95)] z-10 flex flex-col my-auto"
         >
-          {/* Top Cavernous Atmosphere & Ambient Crimson Rays */}
+          {/* Top Cavernous Atmosphere & Ambient Candy Blue Rays */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            {/* Ambient Red Rim Light */}
-            <div className="absolute -top-32 -left-32 w-80 h-80 bg-[#ff1828]/25 blur-3xl rounded-full" />
-            <div className="absolute -top-24 -right-24 w-80 h-80 bg-[#ff1828]/20 blur-3xl rounded-full" />
+            {/* Ambient Blue Rim Light */}
+            <div className="absolute -top-32 -left-32 w-80 h-80 bg-[#00a6ff]/20 blur-3xl rounded-full" />
+            <div className="absolute -top-24 -right-24 w-80 h-80 bg-[#00a6ff]/15 blur-3xl rounded-full" />
             {/* Angular Laser Streak */}
-            <div className="absolute -top-10 -left-10 w-96 h-1 bg-gradient-to-r from-transparent via-[#ff1828]/60 to-transparent rotate-45 transform" />
-            {/* Wet Ground Reflection at bottom */}
-            <div className="absolute bottom-0 inset-x-0 h-36 bg-gradient-to-t from-[#ff1828]/15 via-transparent to-transparent opacity-80" />
+            <div className="absolute -top-10 -left-10 w-96 h-1 bg-gradient-to-r from-transparent via-[#00a6ff]/60 to-transparent rotate-45 transform" />
+            {/* Soft Reflection at bottom */}
+            <div className="absolute bottom-0 inset-x-0 h-36 bg-gradient-to-t from-[#00a6ff]/10 via-transparent to-transparent opacity-80" />
           </div>
 
           {/* Close Button */}
@@ -106,14 +107,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
 
           {/* Main Visual Header Area */}
           <div className="relative pt-10 pb-6 px-6 flex flex-col items-center text-center select-none">
-            {/* Avatar with Crimson Glowing Ring (matching user image) */}
+            {/* Avatar with Candy Blue Glowing Ring */}
             <div className="relative mb-5 flex items-center justify-center">
               {/* Outer Neon Glow Circle */}
-              <div className="absolute w-36 h-36 rounded-full border-2 border-[#ff1828] shadow-[0_0_35px_rgba(255,24,40,0.8),inset_0_0_20px_rgba(255,24,40,0.4)] animate-pulse" />
+              <div className="absolute w-36 h-36 rounded-full border-2 border-[#00a6ff] shadow-[0_0_35px_rgba(0,166,255,0.8),inset_0_0_20px_rgba(0,166,255,0.4)] animate-pulse" />
               
               {/* Angular Neon Rim Light Spike */}
-              <div className="absolute -top-3 -right-3 w-10 h-1 bg-[#ff1828] rotate-45 shadow-[0_0_15px_#ff1828]" />
-              <div className="absolute -bottom-2 -left-3 w-8 h-1 bg-[#ff1828] -rotate-45 shadow-[0_0_15px_#ff1828]" />
+              <div className="absolute -top-3 -right-3 w-10 h-1 bg-[#00a6ff] rotate-45 shadow-[0_0_15px_#00a6ff]" />
+              <div className="absolute -bottom-2 -left-3 w-8 h-1 bg-[#00a6ff] -rotate-45 shadow-[0_0_15px_#00a6ff]" />
 
               {/* 3D Avatar Image */}
               <div className="w-28 h-28 rounded-full overflow-hidden bg-black/60 border border-white/20 relative z-10 flex items-center justify-center shadow-2xl">
@@ -122,14 +123,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                   alt="Think Creative Avatar"
                   className="w-full h-full object-cover object-top scale-110 translate-y-1"
                   onError={(e) => {
-                    // Fallback to stylized SVG avatar if image fails
                     (e.target as HTMLElement).style.display = 'none';
                   }}
                 />
               </div>
             </div>
 
-            {/* Title: THINK CREATIVE (styled exactly as mockup) */}
+            {/* Title: THINK CREATIVE with Candy Blue */}
             <div className="space-y-0.5 tracking-wider">
               <h2
                 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-[0.2em]"
@@ -138,7 +138,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                 THINK
               </h2>
               <h2
-                className="text-2xl sm:text-3xl font-black text-[#ff1828] uppercase tracking-[0.2em] drop-shadow-[0_0_25px_rgba(255,24,40,0.85)]"
+                className="text-2xl sm:text-3xl font-black text-[#00a6ff] uppercase tracking-[0.2em] drop-shadow-[0_0_25px_rgba(0,166,255,0.85)]"
                 style={{ fontFamily: "'Syne', sans-serif" }}
               >
                 CREATIVE
@@ -146,7 +146,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
             </div>
 
             <p className="mt-2 text-[11px] text-zinc-400 max-w-[260px] leading-relaxed">
-              Sign in to sync your chats, code snapshots, and project blueprints to your cloud database.
+              Sign in to sync your chats, code snapshots, and project blueprints across all your devices.
             </p>
           </div>
 
@@ -160,32 +160,31 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
 
             {mode === 'selection' ? (
               <div className="w-full space-y-3.5">
-                {/* 1. Continue with Email (Pill Button with Crimson Rim Glow) */}
+                {/* 1. Continue with Email */}
                 <button
                   type="button"
                   onClick={() => setMode('email')}
-                  className="w-full h-14 rounded-full bg-black/55 hover:bg-black/80 border border-[#ff1828]/70 hover:border-[#ff1828] shadow-[0_0_22px_rgba(255,24,40,0.35)] hover:shadow-[0_0_32px_rgba(255,24,40,0.6)] flex items-center px-6 gap-4 text-white font-semibold text-sm transition-all duration-300 cursor-pointer group"
+                  className="w-full h-14 rounded-full bg-black/55 hover:bg-black/80 border border-[#00a6ff]/70 hover:border-[#00a6ff] shadow-[0_0_22px_rgba(0,166,255,0.35)] hover:shadow-[0_0_32px_rgba(0,166,255,0.6)] flex items-center px-6 gap-4 text-white font-semibold text-sm transition-all duration-300 cursor-pointer group"
                 >
                   <div className="w-6 flex items-center justify-center text-zinc-200 group-hover:text-white">
                     <Mail size={18} />
                   </div>
                   <div className="h-5 w-[1px] bg-white/20" />
                   <span className="flex-1 text-left tracking-wide">Continue with Email</span>
-                  <ArrowRight size={16} className="text-zinc-400 group-hover:text-[#ff1828] group-hover:translate-x-1 transition-all" />
+                  <ArrowRight size={16} className="text-zinc-400 group-hover:text-[#00a6ff] group-hover:translate-x-1 transition-all" />
                 </button>
 
-                {/* 2. Continue with Google (Pill Button with Colorful G Logo & Rim Glow) */}
+                {/* 2. Continue with Google */}
                 <button
                   type="button"
                   disabled={loading}
                   onClick={handleGoogleSignIn}
-                  className="w-full h-14 rounded-full bg-black/55 hover:bg-black/80 border border-[#ff1828]/70 hover:border-[#ff1828] shadow-[0_0_22px_rgba(255,24,40,0.35)] hover:shadow-[0_0_32px_rgba(255,24,40,0.6)] flex items-center px-6 gap-4 text-white font-semibold text-sm transition-all duration-300 cursor-pointer group disabled:opacity-50"
+                  className="w-full h-14 rounded-full bg-black/55 hover:bg-black/80 border border-[#00a6ff]/70 hover:border-[#00a6ff] shadow-[0_0_22px_rgba(0,166,255,0.35)] hover:shadow-[0_0_32px_rgba(0,166,255,0.6)] flex items-center px-6 gap-4 text-white font-semibold text-sm transition-all duration-300 cursor-pointer group disabled:opacity-50"
                 >
                   <div className="w-6 flex items-center justify-center">
                     {loading ? (
                       <Loader2 size={18} className="animate-spin text-white" />
                     ) : (
-                      /* Google Official Colorful SVG Logo */
                       <svg className="w-5 h-5" viewBox="0 0 24 24">
                         <path
                           fill="#4285F4"
@@ -208,10 +207,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                   </div>
                   <div className="h-5 w-[1px] bg-white/20" />
                   <span className="flex-1 text-left tracking-wide">Continue with Google</span>
-                  <ArrowRight size={16} className="text-zinc-400 group-hover:text-[#ff1828] group-hover:translate-x-1 transition-all" />
+                  <ArrowRight size={16} className="text-zinc-400 group-hover:text-[#00a6ff] group-hover:translate-x-1 transition-all" />
                 </button>
 
-                {/* 3. Non-compulsory / Guest access: Use freely without login */}
+                {/* 3. Continue as Guest */}
                 <div className="pt-2 text-center">
                   <button
                     type="button"
@@ -235,7 +234,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@example.com"
-                    className="w-full px-4 py-3 rounded-2xl bg-black/50 border border-[#ff1828]/50 text-white text-sm focus:outline-none focus:border-[#ff1828] focus:ring-1 focus:ring-[#ff1828]"
+                    className="w-full px-4 py-3 rounded-2xl bg-black/50 border border-[#00a6ff]/50 text-white text-sm focus:outline-none focus:border-[#00a6ff] focus:ring-1 focus:ring-[#00a6ff]"
                   />
                 </div>
 
@@ -249,7 +248,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full px-4 py-3 rounded-2xl bg-black/50 border border-[#ff1828]/50 text-white text-sm focus:outline-none focus:border-[#ff1828] focus:ring-1 focus:ring-[#ff1828]"
+                    className="w-full px-4 py-3 rounded-2xl bg-black/50 border border-[#00a6ff]/50 text-white text-sm focus:outline-none focus:border-[#00a6ff] focus:ring-1 focus:ring-[#00a6ff]"
                   />
                 </div>
 
@@ -264,7 +263,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                   <button
                     type="submit"
                     disabled={loading}
-                    className="flex-1 py-3 rounded-full bg-[#ff1828] hover:bg-[#e01423] text-white font-bold text-xs shadow-[0_0_20px_rgba(255,24,40,0.6)] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    className="flex-1 py-3 rounded-full bg-[#00a6ff] hover:bg-[#0094e6] text-white font-bold text-xs shadow-[0_0_20px_rgba(0,166,255,0.6)] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   >
                     {loading ? (
                       <Loader2 size={16} className="animate-spin" />
@@ -290,9 +289,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
               </form>
             )}
 
-            {/* Subtle security & free-usage indicator */}
+            {/* Subtle security indicator */}
             <div className="mt-4 pt-3 border-t border-white/10 w-full flex items-center justify-center gap-1.5 text-[10px] text-zinc-500">
-              <ShieldCheck size={12} className="text-[#ff1828]" />
+              <ShieldCheck size={12} className="text-[#00a6ff]" />
               <span>Firebase Cloud Authentication • Free & Optional</span>
             </div>
           </div>

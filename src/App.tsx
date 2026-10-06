@@ -53,7 +53,10 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070709] text-white flex flex-col selection:bg-[#f41151] selection:text-white relative">
+    <div
+      className="min-h-screen flex flex-col relative transition-colors duration-380 selection:bg-[var(--primary)] selection:text-white"
+      style={{ backgroundColor: 'var(--bg)', color: 'var(--text)' }}
+    >
       {/* Full Experience Preloader with Asset Preloading */}
       <PremiumLoader />
 
@@ -73,6 +76,9 @@ export default function App() {
         <ProjectsSection
           projects={PROJECTS}
           onSelectProject={(project) => setSelectedProject(project)}
+          onOpenProjectChat={(project) =>
+            handleOpenChat(`Explore AI generation parameters for ${project.title}: ${project.description}`)
+          }
         />
 
         {/* Services & Capabilities with Continuous Rightward Drift */}

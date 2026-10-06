@@ -1,8 +1,83 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    /* -------------------------------------------------------------------
+     * LIGHT THEME — BLUE / WHITE / SOFT NEUMORPHIC
+     * Clean, modern AI-workspace aesthetic
+     * ------------------------------------------------------------------- */
+    --bg: #F4F8FC;
+    --bg-gradient-start: #F8FAFD;
+    --bg-gradient-end: #EEF4FA;
+    --surface: #FFFFFF;
+    --surface-soft: #EEF5FB;
+    --surface-card: #FFFFFF;
+    --surface-nav: rgba(255, 255, 255, 0.85);
+
+    --primary: #4DA3FF;
+    --primary-light: #8CC8FF;
+    --primary-dark: #1769AA;
+    --primary-glow: rgba(77, 163, 255, 0.35);
+
+    --text: #101828;
+    --text-secondary: #667085;
+    --text-muted: #98A2B3;
+
+    --border: rgba(23, 105, 170, 0.12);
+    --border-strong: rgba(23, 105, 170, 0.22);
+
+    --shadow-light: rgba(255, 255, 255, 0.95);
+    --shadow-dark: rgba(71, 105, 135, 0.16);
+
+    /* Neumorphic shadow presets for light theme */
+    --shadow-neumorphic: 8px 8px 22px rgba(71, 105, 135, 0.12), -8px -8px 22px rgba(255, 255, 255, 0.95);
+    --shadow-neumorphic-soft: 5px 5px 14px rgba(71, 105, 135, 0.08), -5px -5px 14px rgba(255, 255, 255, 0.95);
+    --shadow-neumorphic-inset: inset 3px 3px 6px rgba(71, 105, 135, 0.10), inset -3px -3px 6px rgba(255, 255, 255, 0.95);
+
+    color-scheme: light;
+  }
+
+  .dark {
+    /* -------------------------------------------------------------------
+     * DARK THEME — BLACK / RED / WHITE
+     * Futuristic cinematic AI creative workspace aesthetic
+     * ------------------------------------------------------------------- */
+    --bg: #050505;
+    --bg-gradient-start: #08080A;
+    --bg-gradient-end: #030304;
+    --surface: #0B0B0D;
+    --surface-soft: #111114;
+    --surface-card: #0D0D10;
+    --surface-nav: rgba(11, 11, 13, 0.85);
+
+    --primary: #FF1744;
+    --primary-light: #FF4D6D;
+    --primary-dark: #C9002B;
+    --primary-glow: rgba(255, 23, 68, 0.35);
+
+    --text: #FFFFFF;
+    --text-secondary: #A7A7AD;
+    --text-muted: #6B6B75;
+
+    --border: rgba(255, 23, 68, 0.14);
+    --border-strong: rgba(255, 23, 68, 0.28);
+
+    --shadow-light: rgba(255, 255, 255, 0.025);
+    --shadow-dark: rgba(0, 0, 0, 0.75);
+
+    /* Neumorphic shadow presets for dark theme */
+    --shadow-neumorphic: 8px 8px 24px rgba(0, 0, 0, 0.75), -6px -6px 20px rgba(255, 255, 255, 0.025);
+    --shadow-neumorphic-soft: 4px 4px 14px rgba(0, 0, 0, 0.65), -3px -3px 10px rgba(255, 255, 255, 0.02);
+    --shadow-neumorphic-inset: inset 3px 3px 8px rgba(0, 0, 0, 0.85), inset -2px -2px 6px rgba(255, 255, 255, 0.02);
+
+    color-scheme: dark;
+  }
+
   body {
+    background-color: var(--bg);
+    color: var(--text);
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    transition: background-color 380ms ease, color 380ms ease;
   }
 
   h1, h2, h3, .font-display {
@@ -10,6 +85,9 @@
   }
 }
 
+/* -------------------------------------------------------------
+ * Global Theme-Aware Typography & Luxury Serif
+ * ------------------------------------------------------------- */
 .font-luxury-serif {
   font-family: 'Cormorant Garamond', 'Bodoni 72', 'Bodoni Moda', 'Playfair Display', 'Times New Roman', serif;
   font-weight: 700;
@@ -17,31 +95,76 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  color: var(--text);
 }
 
 .font-luxury-serif strong,
 .font-luxury-serif b {
   font-weight: 800;
-  color: #ffffff;
+  color: var(--text);
   letter-spacing: 0.02em;
 }
 
+/* -------------------------------------------------------------
+ * Neumorphic Utility Classes (Theme Sensitive)
+ * ------------------------------------------------------------- */
+.neumorphic-surface {
+  background-color: var(--surface);
+  box-shadow: var(--shadow-neumorphic);
+  border: 1px solid var(--border);
+  transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.neumorphic-card {
+  background-color: var(--surface-card);
+  box-shadow: var(--shadow-neumorphic);
+  border: 1px solid var(--border);
+  transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.neumorphic-card-soft {
+  background-color: var(--surface-soft);
+  box-shadow: var(--shadow-neumorphic-soft);
+  border: 1px solid var(--border);
+  transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.neumorphic-inset {
+  box-shadow: var(--shadow-neumorphic-inset);
+  border: 1px solid var(--border);
+}
+
+.theme-button-primary {
+  background-color: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 4px 18px var(--primary-glow);
+  transition: all 250ms ease;
+}
+
+.theme-button-primary:hover {
+  background-color: var(--primary-dark);
+  box-shadow: 0 6px 24px var(--primary-glow);
+}
+
+.theme-accent-text {
+  color: var(--primary);
+}
+
+.theme-accent-glow {
+  box-shadow: 0 0 25px var(--primary-glow);
+}
+
+/* -------------------------------------------------------------
+ * Animations & Marquee
+ * ------------------------------------------------------------- */
 @keyframes marquee {
-  0% {
-    transform: translateX(0%);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
 }
 
 @keyframes marquee-right {
-  0% {
-    transform: translateX(-50%);
-  }
-  100% {
-    transform: translateX(0%);
-  }
+  0% { transform: translateX(-50%); }
+  100% { transform: translateX(0%); }
 }
 
 .animate-marquee {
@@ -64,17 +187,29 @@
   animation-play-state: paused;
 }
 
-/* Custom scrollbar */
+/* -------------------------------------------------------------
+ * Custom Scrollbar
+ * ------------------------------------------------------------- */
 ::-webkit-scrollbar {
   width: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #070709;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272e;
+  background: var(--text-muted);
+  opacity: 0.5;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #f41151;
+  background: var(--primary);
+}
+
+/* -------------------------------------------------------------
+ * Strict Exceptions from user spec:
+ * Prompt box and questions card retain crisp white card styling
+ * ------------------------------------------------------------- */
+.fixed-prompt-box,
+.fixed-prompt-box * {
+  /* Kept pristine */
 }

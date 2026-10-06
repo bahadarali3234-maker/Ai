@@ -1,3 +1,5 @@
+import type { ClarificationDecision } from './utils/clarificationGate';
+
 export interface Project {
   id: string;
   title: string;
@@ -48,6 +50,66 @@ export interface QuestionBlock {
   selectedOption?: string;
   customAnswer?: string;
   isAnswered?: boolean;
+}
+
+export interface SectionItem {
+  title: string;
+  description?: string;
+  bullets?: string[];
+  codeSnippet?: string;
+  codeLanguage?: string;
+  promptSnippet?: string;
+  isPrompt?: boolean;
+  fileName?: string;
+  question?: QuestionBlock;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'ai';
+  text: string;
+  timestamp: string;
+  isStreaming?: boolean;
+  thoughtDuration?: number;
+  attachments?: AttachedFile[];
+  previousVersions?: string[];
+  futureVersions?: string[];
+  provider?: 'gemini' | 'groq';
+  structuredContent?: {
+    mainTitle?: string | { white: string; red: string };
+    intro?: string;
+    sections?: SectionItem[];
+    question?: QuestionBlock;
+  };
+  activeQuestion?: QuestionBlock;
+  clarificationDecision?: ClarificationDecision;
+  imagePlan?: {
+    mode: 'NONE' | 'AUTO_REFERENCE' | 'USER_REQUESTED';
+    shortReplyText?: string;
+    subjects: Array<{
+      label: string;
+      images: Array<{
+        id: string;
+        url: string;
+        thumbnail?: string;
+        alt: string;
+        title?: string;
+        sourceUrl?: string;
+        sourceDomain?: string;
+        width?: number;
+        height?: number;
+      }>;
+      backupPool?: any[];
+      googleSearchUrl?: string;
+    }>;
+  };
+}
+
+export interface ChatThread {
+  id: string;
+  title: string;
+  promptBanner: string;
+  messages: ChatMessage[];
 }
 
 export interface ArtifactVersion {

@@ -19,6 +19,8 @@ import {
 import { HERO_AVATAR } from '../data/portfolioData';
 import carRainImg from '../assets/images/creatively_car_rain_1789854143893.jpg';
 import { motion, AnimatePresence } from 'motion/react';
+import { ThemeToggle } from './ThemeToggle';
+import { useTheme } from '../context/ThemeContext';
 
 interface Message {
   id: string;
@@ -252,6 +254,7 @@ export const IosChatModal: React.FC<IosChatModalProps> = ({
 
             {/* Right Action Controls */}
             <div className="flex items-center gap-2">
+              <ThemeToggle showLabel={false} />
               {onOpenBooking && (
                 <button
                   onClick={onOpenBooking}

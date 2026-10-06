@@ -1,210 +1,199 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Maximize2, X, Check } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Download,
+  Maximize2,
+  X,
+  Check,
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  ZoomIn,
+  ZoomOut,
+  RefreshCw,
+  Copy,
+  Sparkles,
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export interface GalleryImage {
   id: string;
   url: string;
+  thumbnail?: string;
   alt: string;
+  title?: string;
   sourceUrl?: string;
   sourceTitle?: string;
   sourceDomain?: string;
+  width?: number;
+  height?: number;
+  score?: number;
 }
 
-interface MessageTopImageGalleryProps {
-  promptOrTopic: string;
+export interface SubjectGalleryGroup {
+  label: string;
+  intent?: string;
+  shortReplyText?: string;
+  images: GalleryImage[];
+  backupPool?: GalleryImage[];
+  googleSearchUrl?: string;
+}
+
+export interface MessageTopImageGalleryProps {
+  promptOrTopic?: string;
+  subjects?: SubjectGalleryGroup[];
   customImages?: GalleryImage[];
+  mode?: 'NONE' | 'AUTO_REFERENCE' | 'USER_REQUESTED';
+  shortReplyText?: string;
+  googleSearchUrl?: string;
 }
 
 /**
- * Returns 3 to 4 topic-related high-resolution images tailored to the prompt.
- * Fetches real photographic references from Google & Web image crawler.
- * Users can click to expand wide, copy direct link, and download directly.
+ * Message Top Image Gallery
+ * Displays real photographic references curated by Image Planner & Multi-source Crawler.
+ * Features:
+ * - Multi-subject labeled galleries (e.g. "Ferrari SF90" & "Lamborghini Revuelto")
+ * - Source domain chips on every card (e.g. "wikimedia.org")
+ * - Silent auto-replace on broken image (onError pulls from backupPool)
+ * - Full-screen interactive lightbox with zoom, pan, copy link, and direct download
+ * - "Open in Google Images" chip link
+ * - "Aur dikhao / Show more" expansion
  */
-export function getRelatedImagesForTopic(text: string): GalleryImage[] {
-  const lower = text.toLowerCase();
-
-  // 1. Timetable / Daily Routine / Schedule / Productivity
-  if (/timetable|time\s*table|routine|schedule|planner|day\s*plan|morning|productivity/i.test(lower)) {
-    return [
-      {
-        id: 'img-rt-1',
-        url: 'https://images.unsplash.com/photo-1506126613408-eca07ce68773?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Morning Meditation & Mobility Routine',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-rt-2',
-        url: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Intense Strength & Fitness Workout',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-rt-3',
-        url: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1200&q=80',
-        alt: 'High-Focus Deep Work Obsidian Desk Setup',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-rt-4',
-        url: 'https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Nutritious Fuel & Clean Diet Meal',
-        sourceDomain: 'unsplash.com',
-      },
-    ];
-  }
-
-  // 2. Workout / Fitness / Gym
-  if (/workout|fitness|gym|exercise|training|muscle|hypertrophy/i.test(lower)) {
-    return [
-      {
-        id: 'img-fit-1',
-        url: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1200&q=80',
-        alt: 'High-Performance Gym Training Facility',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-fit-2',
-        url: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Strength & Core Hypertrophy Session',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-fit-3',
-        url: 'https://images.unsplash.com/photo-1540497077202-7c8a3999166f?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Athletic Conditioning & Dumbbells',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-fit-4',
-        url: 'https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Athletic Recovery & Nutrition Bowl',
-        sourceDomain: 'unsplash.com',
-      },
-    ];
-  }
-
-  // 3. Automotive / Car / BMW / Supercar / Telemetry
-  if (/bmw|car|automotive|vehicle|telemetry|motor|speed|supercar|racing/i.test(lower)) {
-    return [
-      {
-        id: 'img-car-1',
-        url: 'https://upload.wikimedia.org/wikipedia/commons/e/e2/2021_BMW_M4_Competition_Automatic_3.0_Front.jpg',
-        alt: '2021 BMW M4 Competition Twin-Turbo Frontal',
-        sourceTitle: 'BMW M4 Competition • Google Verified Reference',
-        sourceDomain: 'bmw.com',
-      },
-      {
-        id: 'img-car-2',
-        url: 'https://images.unsplash.com/photo-1617788138017-80ad40651399?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Dark Obsidian Performance Coupe',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-car-3',
-        url: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1200&q=80',
-        alt: 'Aerodynamic Supercar Profile',
-        sourceDomain: 'unsplash.com',
-      },
-      {
-        id: 'img-car-4',
-        url: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Farfus_Hockenheim2015-4.jpg',
-        alt: 'BMW M4 DTM Aerodynamic High-Downforce Profile',
-        sourceTitle: 'BMW Motorsport • Google Verified Reference',
-        sourceDomain: 'wikimedia.org',
-      },
-    ];
-  }
-
-  // General default fallback
-  return [
-    {
-      id: 'img-def-1',
-      url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80',
-      alt: 'Next-Generation Silicon Neural Engine',
-      sourceDomain: 'unsplash.com',
-    },
-    {
-      id: 'img-def-2',
-      url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=80',
-      alt: 'Global Neural Data Sphere & High Connectivity',
-      sourceDomain: 'unsplash.com',
-    },
-    {
-      id: 'img-def-3',
-      url: 'https://images.unsplash.com/photo-1531297484001-80022131f5a1?auto=format&fit=crop&w=1200&q=80',
-      alt: 'Advanced Quantum Computing Terminal',
-      sourceDomain: 'unsplash.com',
-    },
-    {
-      id: 'img-def-4',
-      url: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1200&q=80',
-      alt: 'High-Tech Intelligent Workspace',
-      sourceDomain: 'unsplash.com',
-    },
-  ];
-}
-
 export const MessageTopImageGallery: React.FC<MessageTopImageGalleryProps> = ({
-  promptOrTopic,
+  promptOrTopic = '',
+  subjects,
   customImages,
+  mode = 'AUTO_REFERENCE',
+  shortReplyText,
+  googleSearchUrl,
 }) => {
-  const [selectedImage, setSelectedImage] = useState<GalleryImage | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadSuccessId, setDownloadSuccessId] = useState<string | null>(null);
-  const [dynamicImages, setDynamicImages] = useState<GalleryImage[] | null>(null);
-
-  // Dynamic Google/Web crawler reference image fetch
-  useEffect(() => {
-    let isCancelled = false;
-    const cleanQ = promptOrTopic
-      .replace(/^(find|show|give|search|get|display|me|a|an|the|reference|image|photo|picture|pictures|photos|of|about)\s+/gi, '')
-      .replace(/[^\w\s-]/g, ' ')
-      .trim();
-
-    if (!customImages && cleanQ.length >= 2) {
-      fetch(`/api/reference-images?q=${encodeURIComponent(cleanQ)}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!isCancelled && data?.images && data.images.length > 0) {
-            setDynamicImages(data.images);
-          }
-        })
-        .catch((err) => {
-          console.warn('Reference images error:', err);
-        });
+  // If subjects were passed directly by planner
+  const [galleryGroups, setGalleryGroups] = useState<SubjectGalleryGroup[]>(() => {
+    if (subjects && subjects.length > 0) {
+      return subjects;
     }
+    if (customImages && customImages.length > 0) {
+      return [
+        {
+          label: promptOrTopic || 'Visual Reference',
+          images: customImages,
+          backupPool: [],
+          googleSearchUrl,
+        },
+      ];
+    }
+    return [];
+  });
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [promptOrTopic, customImages]);
+  const [lightboxImage, setLightboxImage] = useState<GalleryImage | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const images = customImages && customImages.length >= 2
-    ? customImages
-    : dynamicImages && dynamicImages.length >= 2
-    ? dynamicImages
-    : getRelatedImagesForTopic(promptOrTopic);
+  // If initial groups are empty and we have a promptOrTopic, fetch from /api/reference-images
+  React.useEffect(() => {
+    if ((!subjects || subjects.length === 0) && (!customImages || customImages.length === 0) && promptOrTopic.trim()) {
+      let isCancelled = false;
+      const cleanQ = promptOrTopic
+        .replace(/^(find|show|give|search|get|display|me|a|an|the|reference|image|photo|picture|pictures|photos|of|about)\s+/gi, '')
+        .trim();
 
-  const handleDownloadImage = async (e: React.MouseEvent, img: GalleryImage) => {
+      if (cleanQ.length >= 2) {
+        fetch(`/api/reference-images?q=${encodeURIComponent(cleanQ)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (!isCancelled && data?.images && data.images.length > 0) {
+              setGalleryGroups([
+                {
+                  label: promptOrTopic,
+                  images: data.images,
+                  backupPool: data.backupPool || [],
+                  googleSearchUrl: data.googleSearchUrl,
+                },
+              ]);
+            }
+          })
+          .catch((err) => {
+            console.warn('Reference images error:', err);
+          });
+      }
+
+      return () => {
+        isCancelled = true;
+      };
+    }
+  }, [promptOrTopic, subjects, customImages]);
+
+  // Handle broken image: silently swap with next candidate from backup pool
+  const handleImageError = (groupIndex: number, imgIndex: number, failedUrl: string) => {
+    setGalleryGroups((prev) => {
+      const updated = [...prev];
+      const grp = { ...updated[groupIndex] };
+      const backup = [...(grp.backupPool || [])];
+
+      if (backup.length > 0) {
+        // Pop next available backup image
+        const nextImg = backup.shift()!;
+        const updatedImages = [...grp.images];
+        updatedImages[imgIndex] = nextImg;
+        grp.images = updatedImages;
+        grp.backupPool = backup;
+        updated[groupIndex] = grp;
+      } else {
+        // Fallback to image-proxy if no backup pool item left
+        const targetImg = grp.images[imgIndex];
+        if (targetImg && !targetImg.url.includes('/api/image-proxy')) {
+          const proxiedImg = {
+            ...targetImg,
+            url: `/api/image-proxy?url=${encodeURIComponent(failedUrl)}`,
+            thumbnail: `/api/image-proxy?url=${encodeURIComponent(failedUrl)}`,
+          };
+          const updatedImages = [...grp.images];
+          updatedImages[imgIndex] = proxiedImg;
+          grp.images = updatedImages;
+          updated[groupIndex] = grp;
+        }
+      }
+
+      return updated;
+    });
+  };
+
+  // "Aur dikhao / Show more" expansion
+  const handleLoadMoreForGroup = (groupIndex: number) => {
+    setGalleryGroups((prev) => {
+      const updated = [...prev];
+      const grp = { ...updated[groupIndex] };
+      const backup = [...(grp.backupPool || [])];
+      if (backup.length > 0) {
+        const nextBatch = backup.splice(0, 4);
+        grp.images = [...grp.images, ...nextBatch];
+        grp.backupPool = backup;
+        updated[groupIndex] = grp;
+      }
+      return updated;
+    });
+  };
+
+  const handleDownload = async (e: React.MouseEvent, img: GalleryImage) => {
     e.stopPropagation();
     setDownloadingId(img.id);
     try {
-      const response = await fetch(img.url, { mode: 'cors' });
-      const blob = await response.blob();
+      const res = await fetch(img.url, { mode: 'cors' });
+      const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      const cleanName = img.alt.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      link.download = `${cleanName || 'visual-asset'}.jpg`;
+      const cleanName = (img.title || img.alt || 'reference-image')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .slice(0, 40);
+      link.download = `${cleanName}.jpg`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(blobUrl);
-      setDownloadSuccessId(img.id);
-      setTimeout(() => setDownloadSuccessId(null), 2500);
     } catch {
-      // Direct anchor or proxy fallback
+      // Proxy fallback
       const link = document.createElement('a');
       link.href = `/api/image-proxy?url=${encodeURIComponent(img.url)}`;
       link.target = '_blank';
@@ -212,171 +201,293 @@ export const MessageTopImageGallery: React.FC<MessageTopImageGalleryProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      setDownloadSuccessId(img.id);
-      setTimeout(() => setDownloadSuccessId(null), 2500);
     } finally {
       setDownloadingId(null);
     }
   };
 
-  // Safe fallback if direct image fails to load (CORS / Hotlinking)
-  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>, originalUrl: string) => {
-    const target = e.currentTarget;
-    const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
-    if (target.src !== proxyUrl && !target.src.includes('/api/image-proxy')) {
-      target.src = proxyUrl;
-    }
+  const handleCopyLink = async (e: React.MouseEvent, img: GalleryImage) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(img.url);
+      setCopiedId(img.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {}
   };
 
+  // Rule: AUTO_REFERENCE requires at least 3 images; otherwise show nothing silently
+  if (mode === 'AUTO_REFERENCE') {
+    const totalImages = galleryGroups.reduce((acc, g) => acc + (g.images?.length || 0), 0);
+    if (totalImages < 3) {
+      return null;
+    }
+  }
+
+  if (galleryGroups.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="w-full mb-5 select-none">
-      {/* Clean Native Header: Only the requested brief text */}
-      <div className="flex items-center gap-2 mb-2.5 px-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-[#ff1828]" />
-        <span className="text-xs sm:text-[13px] text-zinc-300 font-semibold tracking-wide">
-          Ye reference maine dekhe hain, ye dekh lo
-        </span>
-      </div>
+    <div className="w-full mb-6 select-none space-y-6">
+      {/* Short reply text for USER_REQUESTED */}
+      {shortReplyText && (
+        <div className="text-zinc-200 text-sm font-medium leading-relaxed px-1">
+          {shortReplyText}
+        </div>
+      )}
 
-      {/* 4 Clean Native Image Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
-        {images.slice(0, 4).map((img, idx) => {
-          const isDownloading = downloadingId === img.id;
-          const isSuccess = downloadSuccessId === img.id;
+      {galleryGroups.map((group, gIdx) => {
+        const imagesToShow = group.images || [];
+        if (imagesToShow.length === 0) return null;
 
-          return (
-            <motion.div
-              key={img.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35, delay: idx * 0.06 }}
-              onClick={() => setSelectedImage(img)}
-              className="group relative aspect-[16/10] sm:aspect-[4/3] rounded-2xl overflow-hidden bg-black/60 border border-white/10 hover:border-[#ff1828]/60 shadow-[0_4px_20px_rgba(0,0,0,0.5)] hover:shadow-[0_8px_30px_rgba(255,24,40,0.25)] transition-all duration-300 cursor-pointer transform hover:-translate-y-1"
-            >
-              {/* Native Image with subtle hover zoom */}
-              <img
-                src={img.url}
-                alt={img.alt}
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                onError={(e) => handleImageError(e, img.url)}
-                className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-108"
-              />
+        const defaultGoogleUrl =
+          group.googleSearchUrl ||
+          googleSearchUrl ||
+          `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(group.label)}`;
 
-              {/* Sleek subtle dark gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/20 opacity-40 group-hover:opacity-60 transition-opacity" />
+        return (
+          <div key={gIdx} className="space-y-3">
+            {/* Group Header Badge & Count */}
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#00a6ff] shadow-[0_0_8px_#00a6ff] animate-pulse" />
+                <span className="text-xs sm:text-sm font-bold text-zinc-100 tracking-wide">
+                  {mode === 'USER_REQUESTED' ? group.label : `Visual reference: ${group.label}`}
+                </span>
+                <span className="text-[10px] sm:text-xs font-mono bg-zinc-800/90 text-zinc-400 px-2 py-0.5 rounded-full border border-zinc-700/60 font-semibold">
+                  {imagesToShow.length} photos
+                </span>
+              </div>
 
-              {/* Hover Action Controls (Only Expand & Download) */}
-              <div className="absolute inset-0 p-2.5 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-black/40 backdrop-blur-[2px]">
-                {/* Wide Expand Button */}
+              {/* Open in Google Images Chip */}
+              <a
+                href={defaultGoogleUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-[11px] sm:text-xs text-zinc-400 hover:text-white flex items-center gap-1.5 transition-colors font-medium hover:underline bg-zinc-900/60 px-2.5 py-1 rounded-lg border border-zinc-800"
+                title="Search more in Google Images"
+              >
+                <span>Google Images</span>
+                <ExternalLink size={11} className="opacity-70" />
+              </a>
+            </div>
+
+            {/* Responsive Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 sm:gap-3">
+              {imagesToShow.map((img, idx) => {
+                return (
+                  <motion.div
+                    key={img.id || `${gIdx}-${idx}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.25, delay: idx * 0.04 }}
+                    onClick={() => {
+                      setLightboxImage(img);
+                      setZoomLevel(1);
+                    }}
+                    className="group relative aspect-[4/3] rounded-2xl overflow-hidden bg-zinc-900/90 border border-zinc-800/80 hover:border-[#00a6ff]/70 transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.6)] hover:shadow-[0_8px_30px_rgba(0,166,255,0.25)] cursor-pointer"
+                  >
+                    {/* Image */}
+                    <img
+                      src={img.thumbnail || img.url}
+                      alt={img.alt || group.label}
+                      loading="lazy"
+                      onError={() => handleImageError(gIdx, idx, img.url)}
+                      className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500 ease-out"
+                    />
+
+                    {/* Gradient Overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 group-hover:opacity-95 transition-opacity" />
+
+                    {/* Source Domain Chip (Top-left) */}
+                    {img.sourceDomain && (
+                      <div className="absolute top-2 left-2 z-10">
+                        <span className="text-[10px] font-mono font-medium text-zinc-300 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded-md border border-white/10 shadow-sm truncate max-w-[120px] block">
+                          {img.sourceDomain}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Bottom Caption / Title */}
+                    <div className="absolute bottom-2 left-2 right-2 z-10">
+                      <p className="text-[11px] font-medium text-white/95 line-clamp-1 leading-tight drop-shadow-md">
+                        {img.title || img.alt || group.label}
+                      </p>
+                    </div>
+
+                    {/* Hover Action Overlay */}
+                    <div className="absolute inset-0 z-20 bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLightboxImage(img);
+                          setZoomLevel(1);
+                        }}
+                        className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/20 transition-all active:scale-95"
+                        title="View Fullscreen"
+                      >
+                        <Maximize2 size={14} />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopyLink(e, img)}
+                        className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/20 transition-all active:scale-95"
+                        title="Copy direct image link"
+                      >
+                        {copiedId === img.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleDownload(e, img)}
+                        className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/20 transition-all active:scale-95"
+                        title="Download photo"
+                      >
+                        <Download size={14} />
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Aur dikhao / Load more button if backup pool has more images */}
+            {group.backupPool && group.backupPool.length > 0 && (
+              <div className="pt-1 flex items-center justify-center">
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedImage(img);
-                  }}
-                  className="w-9 h-9 rounded-full bg-black/80 hover:bg-black text-white border border-white/20 flex items-center justify-center transition-transform hover:scale-110 active:scale-95 shadow-lg cursor-pointer"
-                  title="Expand"
-                  aria-label="Expand"
+                  onClick={() => handleLoadMoreForGroup(gIdx)}
+                  className="px-4 py-1.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white text-xs font-semibold border border-zinc-700/80 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
                 >
-                  <Maximize2 size={14} />
-                </button>
-
-                {/* Direct Download Button */}
-                <button
-                  type="button"
-                  onClick={(e) => handleDownloadImage(e, img)}
-                  className="w-9 h-9 rounded-full bg-[#ff1828] hover:bg-[#e01423] text-white flex items-center justify-center transition-transform hover:scale-110 active:scale-95 shadow-[0_0_15px_rgba(255,24,40,0.6)] cursor-pointer"
-                  title="Download Image"
-                  aria-label="Download Image"
-                >
-                  {isSuccess ? (
-                    <Check size={14} className="text-white" />
-                  ) : isDownloading ? (
-                    <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Download size={14} />
-                  )}
+                  <RefreshCw size={12} />
+                  <span>Aur dikhao ({group.backupPool.length} more available)</span>
                 </button>
               </div>
-            </motion.div>
-          );
-        })}
-      </div>
+            )}
+          </div>
+        );
+      })}
 
-      {/* Clean Native Lightbox Modal */}
+      {/* High-Resolution Interactive Lightbox Modal */}
       <AnimatePresence>
-        {selectedImage && (
+        {lightboxImage && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setSelectedImage(null)}
-            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md"
+            onClick={() => setLightboxImage(null)}
+            className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col items-center justify-between p-4 sm:p-6"
           >
-            <motion.div
-              initial={{ scale: 0.94, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.94, opacity: 0 }}
-              transition={{ duration: 0.25, ease: 'easeOut' }}
+            {/* Top Toolbar */}
+            <div
               onClick={(e) => e.stopPropagation()}
-              className="relative max-w-5xl w-full max-h-[92vh] bg-[#0c0204] border border-white/20 rounded-3xl overflow-hidden shadow-[0_20px_70px_rgba(0,0,0,0.9),0_0_30px_rgba(255,24,40,0.2)] flex flex-col"
+              className="w-full max-w-5xl flex items-center justify-between text-white pb-3 border-b border-zinc-800 z-10"
             >
-              {/* Lightbox Header Bar - Clean & Native */}
-              <div className="px-5 py-3.5 bg-[#140306] border-b border-white/10 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2 h-2 rounded-full bg-[#ff1828] animate-pulse shrink-0" />
-                  <span className="text-xs sm:text-sm font-semibold text-white tracking-wide truncate">
-                    {selectedImage.alt}
+              <div className="flex items-center gap-3 truncate">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#00a6ff]" />
+                <h3 className="text-sm sm:text-base font-bold truncate">
+                  {lightboxImage.title || lightboxImage.alt || 'High-Resolution Reference'}
+                </h3>
+                {lightboxImage.sourceDomain && (
+                  <span className="text-xs font-mono bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded-md border border-zinc-700">
+                    {lightboxImage.sourceDomain}
                   </span>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {/* Download Button */}
-                  <button
-                    type="button"
-                    onClick={(e) => handleDownloadImage(e, selectedImage)}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-bold shadow-[0_0_15px_rgba(255,24,40,0.5)] transition-all cursor-pointer"
-                  >
-                    {downloadSuccessId === selectedImage.id ? (
-                      <>
-                        <Check size={14} />
-                        <span>Downloaded</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download size={14} />
-                        <span>Download</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Close Lightbox */}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedImage(null)}
-                    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                    title="Close"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
+                )}
               </div>
 
-              {/* Wide Image View */}
-              <div className="relative flex-1 min-h-[350px] max-h-[75vh] flex items-center justify-center p-3 sm:p-6 bg-black">
-                <img
-                  src={selectedImage.url}
-                  alt={selectedImage.alt}
-                  referrerPolicy="no-referrer"
-                  onError={(e) => handleImageError(e, selectedImage.url)}
-                  className="max-w-full max-h-[70vh] object-contain rounded-2xl shadow-2xl select-none"
-                />
+              <div className="flex items-center gap-2">
+                {/* Zoom controls */}
+                <button
+                  type="button"
+                  onClick={() => setZoomLevel((z) => Math.max(0.6, z - 0.25))}
+                  className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors border border-zinc-700 cursor-pointer"
+                  title="Zoom Out"
+                >
+                  <ZoomOut size={16} />
+                </button>
+                <span className="text-xs font-mono text-zinc-400 w-10 text-center">
+                  {Math.round(zoomLevel * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setZoomLevel((z) => Math.min(3, z + 0.25))}
+                  className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors border border-zinc-700 cursor-pointer"
+                  title="Zoom In"
+                >
+                  <ZoomIn size={16} />
+                </button>
+
+                {/* Source link */}
+                {lightboxImage.sourceUrl && (
+                  <a
+                    href={lightboxImage.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors border border-zinc-700 flex items-center gap-1.5 text-xs font-medium"
+                    title="View Source Page"
+                  >
+                    <ExternalLink size={16} />
+                  </a>
+                )}
+
+                {/* Copy Link */}
+                <button
+                  type="button"
+                  onClick={(e) => handleCopyLink(e, lightboxImage)}
+                  className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors border border-zinc-700 cursor-pointer"
+                  title="Copy Direct Link"
+                >
+                  {copiedId === lightboxImage.id ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
+                </button>
+
+                {/* Download */}
+                <button
+                  type="button"
+                  onClick={(e) => handleDownload(e, lightboxImage)}
+                  className="p-2 rounded-xl bg-[#00a6ff] hover:bg-[#0094e6] text-white transition-colors font-bold shadow-[0_0_15px_rgba(0,166,255,0.5)] cursor-pointer"
+                  title="Download Image"
+                >
+                  <Download size={16} />
+                </button>
+
+                {/* Close */}
+                <button
+                  type="button"
+                  onClick={() => setLightboxImage(null)}
+                  className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors cursor-pointer ml-2"
+                  title="Close (Esc)"
+                >
+                  <X size={18} />
+                </button>
               </div>
-            </motion.div>
+            </div>
+
+            {/* Lightbox Center Image with zoom */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 w-full flex items-center justify-center overflow-auto p-2"
+            >
+              <motion.img
+                key={lightboxImage.id}
+                src={lightboxImage.url}
+                alt={lightboxImage.alt}
+                animate={{ scale: zoomLevel }}
+                transition={{ duration: 0.2 }}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(lightboxImage.url)}`;
+                  if (target.src !== proxyUrl && !target.src.includes('/api/image-proxy')) {
+                    target.src = proxyUrl;
+                  }
+                }}
+                className="max-h-[82vh] max-w-[90vw] object-contain rounded-xl shadow-[0_20px_60px_rgba(0,0,0,0.9)] cursor-grab active:cursor-grabbing border border-zinc-800"
+              />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
     </div>
   );
 };
-

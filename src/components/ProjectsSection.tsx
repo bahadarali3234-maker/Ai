@@ -2,10 +2,12 @@ import React, { useRef } from 'react';
 import { ArrowUpRight, Sparkles } from 'lucide-react';
 import { Project } from '../types';
 import { motion, useScroll, useTransform } from 'motion/react';
+import { useTheme } from '../context/ThemeContext';
 
 interface ProjectsSectionProps {
   projects: Project[];
   onSelectProject: (project: Project) => void;
+  onOpenProjectChat?: (project: Project) => void;
 }
 
 interface StickyCardProps {
@@ -13,6 +15,7 @@ interface StickyCardProps {
   index: number;
   total: number;
   onSelectProject: (project: Project) => void;
+  onOpenProjectChat?: (project: Project) => void;
 }
 
 const StickyProjectCard: React.FC<StickyCardProps> = ({
@@ -20,8 +23,11 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
   index,
   total,
   onSelectProject,
+  onOpenProjectChat,
 }) => {
   const cardContainerRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
 
   // Scroll tracking for card depth stacking effect
   const { scrollYProgress } = useScroll({
@@ -43,13 +49,26 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
       }}
     >
       <motion.div
-        style={{ scale, opacity }}
+        style={{
+          scale,
+          opacity,
+          backgroundColor: 'var(--surface)',
+          borderColor: 'var(--border)',
+          boxShadow: isLight
+            ? '0 10px 30px rgba(71, 105, 135, 0.12), -6px -6px 20px rgba(255, 255, 255, 0.95)'
+            : '0 -15px 40px rgba(0,0,0,0.85), 0 25px 60px rgba(0,0,0,0.95)',
+        }}
         id={`project-card-${project.id}`}
         onClick={() => onSelectProject(project)}
-        className="bg-[#0e0e16]/95 backdrop-blur-3xl border border-white/10 hover:border-[#f41151]/50 rounded-[28px] sm:rounded-[36px] p-5 sm:p-7 lg:p-9 shadow-[0_-15px_40px_rgba(0,0,0,0.85),0_25px_60px_rgba(0,0,0,0.95)] transition-colors duration-300 group cursor-pointer overflow-hidden relative"
+        className="backdrop-blur-3xl border rounded-[28px] sm:rounded-[36px] p-5 sm:p-7 lg:p-9 transition-all duration-300 group cursor-pointer overflow-hidden relative"
       >
         {/* Subtle accent glow behind card */}
-        <div className="absolute top-0 right-0 w-80 h-80 bg-[#f41151]/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20 group-hover:bg-[#f41151]/15 transition-all" />
+        <div
+          className="absolute top-0 right-0 w-80 h-80 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20 transition-all duration-500"
+          style={{
+            backgroundColor: isLight ? 'rgba(77, 163, 255, 0.12)' : 'rgba(255, 23, 68, 0.12)',
+          }}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 lg:gap-10 items-center">
           {/* Left Column: Information, Tags, & Action */}
@@ -57,17 +76,33 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
             {/* Top Indicator & Year Badge */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <span className="text-[#f41151] font-mono text-sm sm:text-base font-bold tracking-wider">
+                <span
+                  className="font-mono text-sm sm:text-base font-bold tracking-wider"
+                  style={{ color: 'var(--primary)' }}
+                >
                   0{index + 1} / 0{total}
                 </span>
-                <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
-                <span className="text-zinc-400 text-xs sm:text-sm font-medium uppercase tracking-wider flex items-center gap-1">
-                  <Sparkles size={12} className="text-[#f41151]" />
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: 'var(--text-muted)' }}
+                />
+                <span
+                  className="text-xs sm:text-sm font-medium uppercase tracking-wider flex items-center gap-1"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  <Sparkles size={12} style={{ color: 'var(--primary)' }} />
                   <span>Featured AI Creation</span>
                 </span>
               </div>
 
-              <span className="px-3 py-1 rounded-full text-xs font-mono font-medium text-white/90 bg-white/5 border border-white/10">
+              <span
+                className="px-3 py-1 rounded-full text-xs font-mono font-medium border transition-colors"
+                style={{
+                  backgroundColor: 'var(--surface-soft)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
                 {project.year}
               </span>
             </div>
@@ -75,15 +110,24 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
             {/* Title & Description */}
             <div>
               <h3
-                className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight leading-tight group-hover:text-zinc-100 transition-colors"
-                style={{ fontFamily: "'Syne', sans-serif" }}
+                className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight transition-colors"
+                style={{
+                  fontFamily: "'Syne', sans-serif",
+                  color: 'var(--text)',
+                }}
               >
                 {project.title}
               </h3>
-              <p className="text-zinc-400 text-xs sm:text-sm font-medium mt-1 text-zinc-300">
+              <p
+                className="text-xs sm:text-sm font-medium mt-1 transition-colors"
+                style={{ color: 'var(--primary)' }}
+              >
                 {project.subtitle}
               </p>
-              <p className="text-zinc-400 text-xs sm:text-sm leading-relaxed mt-3 line-clamp-3">
+              <p
+                className="text-xs sm:text-sm leading-relaxed mt-3 line-clamp-3 transition-colors"
+                style={{ color: 'var(--text-secondary)' }}
+              >
                 {project.description}
               </p>
             </div>
@@ -93,7 +137,12 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
               {project.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="px-3 py-1 text-xs font-medium text-zinc-300 bg-white/[0.05] rounded-full border border-white/[0.08]"
+                  className="px-3 py-1 text-xs font-medium rounded-full border transition-colors"
+                  style={{
+                    backgroundColor: 'var(--surface-soft)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
                 >
                   {tag}
                 </span>
@@ -106,22 +155,35 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectProject(project);
+                  if (onOpenProjectChat) {
+                    onOpenProjectChat(project);
+                  } else {
+                    onSelectProject(project);
+                  }
                 }}
-                className="inline-flex items-center gap-2 px-5 sm:px-6 py-2.5 sm:py-3 rounded-full bg-[#f41151] hover:bg-[#ff1e5d] active:scale-95 text-white font-semibold text-xs sm:text-sm transition-all shadow-[0_0_20px_rgba(244,17,81,0.4)] cursor-pointer"
+                className="inline-flex items-center gap-2 px-5 sm:px-6 py-2.5 sm:py-3 rounded-full text-white font-semibold text-xs sm:text-sm transition-all cursor-pointer active:scale-95 theme-button-primary"
               >
                 <span>Open Conversation</span>
                 <ArrowUpRight size={15} />
               </button>
 
-              <span className="text-zinc-500 text-xs hidden sm:inline">
-                Click to inspect generative parameters &amp; outputs
+              <span
+                className="text-xs hidden sm:inline transition-colors"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Click card for case study or button to open conversation
               </span>
             </div>
           </div>
 
           {/* Right Column: Large Cinematic Visual Preview */}
-          <div className="lg:col-span-6 relative aspect-[16/10] sm:aspect-[16/9] lg:aspect-[4/3] rounded-[22px] sm:rounded-[26px] overflow-hidden bg-[#12121c] border border-white/10 group-hover:border-white/20 transition-all shadow-xl">
+          <div
+            className="lg:col-span-6 relative aspect-[16/10] sm:aspect-[16/9] lg:aspect-[4/3] rounded-[22px] sm:rounded-[26px] overflow-hidden border transition-all shadow-xl"
+            style={{
+              backgroundColor: 'var(--surface-soft)',
+              borderColor: 'var(--border)',
+            }}
+          >
             <img
               src={project.image}
               alt={project.title}
@@ -129,10 +191,24 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
               referrerPolicy="no-referrer"
             />
             {/* Soft overlay gradient */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-70 pointer-events-none" />
+            <div
+              className="absolute inset-0 opacity-60 pointer-events-none"
+              style={{
+                background: isLight
+                  ? 'linear-gradient(to top, rgba(244, 248, 252, 0.5), transparent)'
+                  : 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)',
+              }}
+            />
 
             {/* Floating zoom indicator */}
-            <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center text-white group-hover:bg-[#f41151] transition-all">
+            <div
+              className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 w-9 h-9 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-all group-hover:scale-105"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--text)',
+              }}
+            >
               <ArrowUpRight size={16} />
             </div>
           </div>
@@ -145,9 +221,14 @@ const StickyProjectCard: React.FC<StickyCardProps> = ({
 export const ProjectsSection: React.FC<ProjectsSectionProps> = ({
   projects,
   onSelectProject,
+  onOpenProjectChat,
 }) => {
   return (
-    <section id="work" className="py-20 sm:py-24 bg-[#070709] relative">
+    <section
+      id="work"
+      className="py-20 sm:py-24 relative transition-colors duration-380"
+      style={{ backgroundColor: 'var(--bg)' }}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Section Heading & Stacking Instruction */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-12 sm:mb-16">
@@ -157,15 +238,25 @@ export const ProjectsSection: React.FC<ProjectsSectionProps> = ({
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
           >
-            <span className="text-[#f41151] font-semibold text-xs sm:text-sm tracking-widest uppercase flex items-center gap-1.5 mb-1">
-              <span className="w-2 h-2 rounded-full bg-[#f41151] animate-pulse" />
+            <span
+              className="font-semibold text-xs sm:text-sm tracking-widest uppercase flex items-center gap-1.5 mb-1"
+              style={{ color: 'var(--primary)' }}
+            >
+              <span
+                className="w-2 h-2 rounded-full animate-pulse"
+                style={{ backgroundColor: 'var(--primary)' }}
+              />
               <span>Recent AI Sessions</span>
             </span>
             <h2
-              className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight text-white"
-              style={{ fontFamily: "'Syne', sans-serif" }}
+              className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight transition-colors"
+              style={{
+                fontFamily: "'Syne', sans-serif",
+                color: 'var(--text)',
+              }}
             >
-              Featured <span className="text-[#f41151]">Creations</span>
+              Featured{' '}
+              <span style={{ color: 'var(--primary)' }}>Creations</span>
             </h2>
           </motion.div>
 
@@ -174,7 +265,8 @@ export const ProjectsSection: React.FC<ProjectsSectionProps> = ({
             whileInView={{ opacity: 1, x: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="text-zinc-400 text-xs sm:text-sm max-w-sm"
+            className="text-xs sm:text-sm max-w-sm transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
           >
             Scroll down to reveal each AI creation as it stacks in place. Click any creation to open the conversation.
           </motion.p>
@@ -189,6 +281,7 @@ export const ProjectsSection: React.FC<ProjectsSectionProps> = ({
               index={idx}
               total={projects.length}
               onSelectProject={onSelectProject}
+              onOpenProjectChat={onOpenProjectChat}
             />
           ))}
         </div>

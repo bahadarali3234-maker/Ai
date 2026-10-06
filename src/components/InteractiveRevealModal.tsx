@@ -17,6 +17,8 @@ import {
   X,
   Paperclip,
   LogOut,
+  Lock,
+  Trash2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HERO_AVATAR } from '../data/portfolioData';
@@ -24,7 +26,15 @@ import defaultVisibleImg from '../assets/images/back_reveal.png';
 import revealedUnderneathImg from '../assets/images/front_overlay.jpg';
 import { FullScreenChatView, SttSoundBar } from './FullScreenChatView';
 import { AttachedFile } from '../types';
-import { subscribeToAuth, getCurrentUser, logOut } from '../firebase';
+import { useTheme } from '../context/ThemeContext';
+import { ThemeToggle } from './ThemeToggle';
+import {
+  subscribeToAuth,
+  getCurrentUser,
+  logOut,
+  subscribeToUserChatThreads,
+  deleteChatThreadFromFirestore,
+} from '../firebase';
 
 interface Message {
   id: string;
@@ -49,6 +59,8 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
   initialTopic = '',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
 
   // Chat & Prompt States
   const [inputValue, setInputValue] = useState('');
@@ -59,17 +71,38 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
   const [selectedMode, setSelectedMode] = useState<'Build' | 'Design' | 'Code' | 'Brand'>('Build');
   const [isRecording, setIsRecording] = useState(false);
-  const [activeRecentItem, setActiveRecentItem] = useState('Landing Page Design');
+  const [activeRecentItem, setActiveRecentItem] = useState('Guest Session');
   const [showResponsePopup, setShowResponsePopup] = useState(false);
   const [isFullScreenChatOpen, setIsFullScreenChatOpen] = useState(false);
   const [currentFullScreenPrompt, setCurrentFullScreenPrompt] = useState('');
   const [currentFullScreenAttachments, setCurrentFullScreenAttachments] = useState<AttachedFile[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(() => getCurrentUser());
+  const [userChatThreads, setUserChatThreads] = useState<Record<string, any>>({});
 
   useEffect(() => {
-    const unsub = subscribeToAuth((user) => setCurrentUser(user));
+    const unsub = subscribeToAuth((user) => {
+      setCurrentUser(user);
+      if (user && !user.isAnonymous) {
+        setActiveRecentItem('');
+      } else {
+        setActiveRecentItem('Guest Session');
+        setUserChatThreads({});
+      }
+    });
     return () => unsub();
   }, []);
+
+  // Listen to Firestore real-time chats if user is logged in
+  useEffect(() => {
+    if (!currentUser || currentUser.isAnonymous) {
+      setUserChatThreads({});
+      return;
+    }
+    const unsub = subscribeToUserChatThreads(currentUser.uid, (threads) => {
+      setUserChatThreads(threads);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
 
   // Working File Attachments (Matches exact screenshot styling, Max 10 files)
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
@@ -189,6 +222,12 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
       setRenderOpacity(0);
       if (initialTopic) {
         setInputValue(initialTopic);
+        const targetTopic = currentUser && !currentUser.isAnonymous
+          ? (initialTopic.length > 25 ? `${initialTopic.slice(0, 25)}...` : initialTopic)
+          : 'Guest Session';
+        setActiveRecentItem(targetTopic);
+        setCurrentFullScreenPrompt(initialTopic);
+        setIsFullScreenChatOpen(true);
       }
     }
   }, [isOpen, initialTopic]);
@@ -298,12 +337,18 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
     };
 
     setMessages((prev) => [...prev, userMsg]);
+    const targetTopic = currentUser && !currentUser.isAnonymous
+      ? (promptText.length > 25 ? `${promptText.slice(0, 25)}...` : promptText)
+      : 'Guest Session';
+
+    setActiveRecentItem(targetTopic);
     setCurrentFullScreenPrompt(promptText);
     setCurrentFullScreenAttachments([...attachments]);
     setInputValue('');
     setAttachments([]); // Clean up already attached files
     setIsPlusMenuOpen(false);
     setIsModeMenuOpen(false);
+    setIsDrawerOpen(false);
     setIsFullScreenChatOpen(true);
   };
 
@@ -440,15 +485,26 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
   };
 
   const handleNewChat = () => {
+    if (!currentUser || currentUser.isAnonymous) {
+      setIsDrawerOpen(false);
+      onOpenLogin?.();
+      return;
+    }
     setInputValue('');
     setShowResponsePopup(false);
     setIsDrawerOpen(false);
     setCurrentFullScreenPrompt('');
-    setActiveRecentItem('Landing Page Design');
+    const newTopic = `Chat ${Object.keys(userChatThreads).length + 1}`;
+    setActiveRecentItem(newTopic);
     setIsFullScreenChatOpen(true);
   };
 
   const handleSelectRecent = (title: string) => {
+    if (!currentUser || currentUser.isAnonymous) {
+      setIsDrawerOpen(false);
+      onOpenLogin?.();
+      return;
+    }
     setActiveRecentItem(title);
     setCurrentFullScreenPrompt('');
     setIsDrawerOpen(false);
@@ -464,7 +520,9 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.3, ease: 'easeInOut' }}
-        className="fixed inset-0 z-[9999] bg-black select-none overflow-hidden touch-none"
+        className={`fixed inset-0 z-[9999] bg-black overflow-hidden ${
+          isFullScreenChatOpen ? '' : 'select-none touch-none'
+        }`}
       >
         {/* Interactive Dual-Layer Reveal Canvas (Active across the whole screen) */}
         <div
@@ -516,7 +574,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
           <div className="absolute bottom-0 left-0 right-0 h-36 bg-gradient-to-t from-black/75 to-transparent pointer-events-none" />
         </div>
 
-        {/* TOP CORNER: Three Lines Menu Button ONLY (No back arrow, cross, or camera icon) */}
+        {/* TOP CORNER: Three Lines Menu Button */}
         <div className="absolute top-5 sm:top-6 left-5 sm:left-6 z-40 pointer-events-auto">
           <button
             id="reveal-three-lines-menu-btn"
@@ -529,6 +587,20 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
             <span className="w-5 h-[2px] bg-white rounded-full transition-all group-hover:w-6" />
             <span className="w-5 h-[2px] bg-white rounded-full transition-all group-hover:w-4" />
             <span className="w-5 h-[2px] bg-white rounded-full transition-all group-hover:w-6" />
+          </button>
+        </div>
+
+        {/* TOP RIGHT CORNER: Theme Toggle & Close Button */}
+        <div className="absolute top-5 sm:top-6 right-5 sm:right-6 z-40 pointer-events-auto flex items-center gap-2">
+          <ThemeToggle showLabel={false} />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+            className="w-11 h-11 rounded-2xl bg-black/40 hover:bg-black/70 text-white flex items-center justify-center transition-all cursor-pointer border border-white/20 backdrop-blur-xl shadow-[0_4px_20px_rgba(0,0,0,0.6)] active:scale-95"
+          >
+            <X size={20} />
           </button>
         </div>
 
@@ -553,7 +625,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ duration: 0.6, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
-                className="text-3xl xs:text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-[#f41151] uppercase flex items-center justify-center w-full drop-shadow-[0_15px_35px_rgba(244,17,81,0.4)]"
+                className="text-3xl xs:text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.88] text-[#00a6ff] uppercase flex items-center justify-center w-full drop-shadow-[0_15px_35px_rgba(0, 166, 255,0.4)]"
                 style={{ fontFamily: "'Syne', sans-serif" }}
               >
                 CREATIVE
@@ -572,12 +644,12 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                   className="relative group cursor-pointer select-none"
                 >
                   {/* Crimson backlight glow behind character cutout */}
-                  <div className="absolute inset-0 bg-[#f41151]/30 blur-2xl rounded-full transform scale-90 pointer-events-none" />
+                  <div className="absolute inset-0 bg-[#00a6ff]/30 blur-2xl rounded-full transform scale-90 pointer-events-none" />
 
                   <img
                     src={HERO_AVATAR}
                     alt="Irtza 3D Cutout Character Avatar"
-                    className="w-14 xs:w-18 sm:w-32 md:w-40 lg:w-48 max-w-none h-auto object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.95)] drop-shadow-[0_0_30px_rgba(244,17,81,0.4)] transform group-hover:scale-105 transition-transform duration-500 pointer-events-none"
+                    className="w-14 xs:w-18 sm:w-32 md:w-40 lg:w-48 max-w-none h-auto object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.95)] drop-shadow-[0_0_30px_rgba(0, 166, 255,0.4)] transform group-hover:scale-105 transition-transform duration-500 pointer-events-none"
                     referrerPolicy="no-referrer"
                   />
                 </motion.div>
@@ -640,16 +712,16 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                         processFiles(e.dataTransfer.files);
                       }
                     }}
-                    className={`relative rounded-[28px] sm:rounded-[32px] bg-[#f8f9fc]/95 backdrop-blur-xl text-zinc-900 px-5 pt-4 pb-3 shadow-[0_20px_60px_rgba(0,0,0,0.85),0_0_40px_rgba(244,17,81,0.15)] border transition-all ${
+                    className={`relative rounded-[28px] sm:rounded-[32px] bg-[#f8f9fc]/95 backdrop-blur-xl text-zinc-900 px-5 pt-4 pb-3 shadow-[0_20px_60px_rgba(0,0,0,0.85),0_0_40px_rgba(0, 166, 255,0.15)] border transition-all ${
                       isDraggingOver
-                        ? 'border-[#ff1828] bg-white ring-2 ring-[#ff1828]/30'
+                        ? 'border-[#00a6ff] bg-white ring-2 ring-[#00a6ff]/30'
                         : 'border-white/90'
                     }`}
                   >
                     {/* Live Speech Recognition Pill */}
                     {isRecording && (
-                      <div className="flex items-center gap-2 mb-2 px-3 py-1 rounded-full bg-red-50 border border-[#ff1828]/25 text-[#ff1828] text-xs font-semibold w-fit">
-                        <span className="w-2 h-2 rounded-full bg-[#ff1828] animate-ping" />
+                      <div className="flex items-center gap-2 mb-2 px-3 py-1 rounded-full bg-red-50 border border-[#00a6ff]/25 text-[#00a6ff] text-xs font-semibold w-fit">
+                        <span className="w-2 h-2 rounded-full bg-[#00a6ff] animate-ping" />
                         <span>Live Listening... Jo aap bolenge sath sath yahan type hoga</span>
                       </div>
                     )}
@@ -683,7 +755,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                                     e.stopPropagation();
                                     removeAttachment(file.id);
                                   }}
-                                  className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/75 hover:bg-[#ff1828] text-white flex items-center justify-center transition-colors cursor-pointer shadow-sm active:scale-90"
+                                  className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/75 hover:bg-[#00a6ff] text-white flex items-center justify-center transition-colors cursor-pointer shadow-sm active:scale-90"
                                   title={`Remove ${file.name}`}
                                   aria-label={`Remove ${file.name}`}
                                 >
@@ -727,7 +799,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                           initial={{ opacity: 0, y: -4 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -4 }}
-                          className="text-xs text-[#ff1828] font-medium px-1 py-1"
+                          className="text-xs text-[#00a6ff] font-medium px-1 py-1"
                         >
                           {fileLimitError}
                         </motion.div>
@@ -792,7 +864,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                                     }}
                                     className={`w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-all ${
                                       selectedMode === m
-                                        ? 'bg-[#f41151] text-white'
+                                        ? 'bg-[#00a6ff] text-white'
                                         : 'text-zinc-300 hover:bg-white/10'
                                     }`}
                                   >
@@ -864,7 +936,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
               >
                 <div className="rounded-2xl bg-black/85 backdrop-blur-2xl border border-red-500/30 p-4 shadow-[0_15px_40px_rgba(0,0,0,0.85)] text-white text-xs sm:text-sm space-y-2">
                   <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono pb-1 border-b border-white/10">
-                    <span className="text-[#f41151] font-semibold">AI Intelligence Blueprint</span>
+                    <span className="text-[#00a6ff] font-semibold">AI Intelligence Blueprint</span>
                     <button
                       onClick={() => setShowResponsePopup(false)}
                       className="hover:text-white p-0.5 rounded cursor-pointer"
@@ -877,7 +949,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                       key={m.id}
                       className={`p-2.5 rounded-xl ${
                         m.sender === 'user'
-                          ? 'bg-[#f41151]/20 border border-[#f41151]/40 text-right text-white'
+                          ? 'bg-[#00a6ff]/20 border border-[#00a6ff]/40 text-right text-white'
                           : 'bg-white/10 text-zinc-200'
                       }`}
                     >
@@ -886,7 +958,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                   ))}
                   {isTyping && (
                     <div className="flex items-center gap-1.5 py-1 text-xs text-zinc-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#f41151] animate-ping" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#00a6ff] animate-ping" />
                       <span>Synthesizing specs...</span>
                     </div>
                   )}
@@ -908,24 +980,37 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                 onClick={() => setIsDrawerOpen(false)}
                 className="absolute inset-0 bg-black/75 backdrop-blur-md z-50 pointer-events-auto flex items-center justify-start p-2 sm:p-6"
               >
-                {/* Floating Card exactly like 818353585_2187346241811364_3188723849392091368_n.webp.jpg */}
+                {/* Floating Card */}
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95, x: -40 }}
                   animate={{ opacity: 1, scale: 1, x: 0 }}
                   exit={{ opacity: 0, scale: 0.95, x: -40 }}
                   transition={{ type: 'spring', damping: 25, stiffness: 300 }}
                   onClick={(e) => e.stopPropagation()}
-                  className="relative w-full max-w-[345px] sm:max-w-[365px] h-[92vh] max-h-[820px] bg-black rounded-[38px] border-2 border-[#ff1828] shadow-[0_0_40px_rgba(255,24,40,0.55),inset_0_0_25px_rgba(255,24,40,0.2)] p-6 flex flex-col justify-between overflow-hidden select-none"
+                  className="relative w-full max-w-[345px] sm:max-w-[365px] h-[92vh] max-h-[820px] rounded-[38px] border-2 p-6 flex flex-col justify-between overflow-hidden select-none transition-colors duration-300"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--primary)',
+                    boxShadow: isLight
+                      ? '0 10px 40px rgba(71, 105, 135, 0.16)'
+                      : '0 0 40px rgba(0, 166, 255, 0.45)',
+                    color: 'var(--text)',
+                  }}
                 >
-                  {/* Atmospheric subtle red smoky nebula background */}
-                  <div className="absolute -top-12 -right-12 w-48 h-48 bg-[#ff1828]/15 rounded-full blur-3xl pointer-events-none" />
-                  <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-[#ff1828]/15 rounded-full blur-3xl pointer-events-none" />
-                  <div className="absolute top-1/2 right-0 w-32 h-32 bg-[#ff1828]/10 rounded-full blur-3xl pointer-events-none" />
+                  {/* Atmospheric subtle nebula background */}
+                  <div
+                    className="absolute -top-12 -right-12 w-48 h-48 rounded-full blur-3xl pointer-events-none opacity-20"
+                    style={{ backgroundColor: 'var(--primary)' }}
+                  />
+                  <div
+                    className="absolute -bottom-12 -left-12 w-48 h-48 rounded-full blur-3xl pointer-events-none opacity-20"
+                    style={{ backgroundColor: 'var(--primary)' }}
+                  />
 
-                  {/* TOP FIXED SECTION: BMW ///M Logo + Navigation */}
-                  <div className="shrink-0 space-y-4 relative z-10">
+                  {/* TOP FIXED SECTION: BMW ///M Logo & Theme Switcher */}
+                  <div className="shrink-0 relative z-10">
                     {/* TOP LOGO: Exact BMW ///M Logo from Reference Image */}
-                    <div className="flex items-center justify-center pt-2 pb-1">
+                    <div className="flex items-center justify-between pt-1 pb-1">
                       <div className="flex items-center gap-2 select-none">
                         {/* Three slanted /// stripes: Light Blue, Dark Navy, Crimson Red */}
                         <div className="flex items-center gap-1.5 -skew-x-[18deg]">
@@ -933,92 +1018,143 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                           <span className="w-2.5 h-7 sm:w-3 sm:h-8 bg-[#17205a] rounded-[1px]" />
                           <span className="w-2.5 h-7 sm:w-3 sm:h-8 bg-[#E21B23] rounded-[1px] shadow-[0_0_16px_rgba(226,27,35,0.9)]" />
                         </div>
-                        {/* Metallic Chrome Slanted M (clean without blurry drop shadow) */}
-                        <span className="text-white text-3xl sm:text-4xl font-black italic tracking-tighter ml-1">
+                        {/* Metallic Chrome Slanted M */}
+                        <span
+                          className="text-3xl sm:text-4xl font-black italic tracking-tighter ml-1 transition-colors"
+                          style={{ color: 'var(--text)' }}
+                        >
                           M
                         </span>
                       </div>
-                    </div>
 
-                    {/* + New Chat Pill Button */}
-                    <button
-                      type="button"
-                      onClick={handleNewChat}
-                      className="w-full py-3 px-4 rounded-[20px] bg-[#0c0204] border-[1.5px] border-[#ff1828] text-white font-medium text-[15px] flex items-center justify-between shadow-[0_0_18px_rgba(255,24,40,0.6)] hover:shadow-[0_0_26px_rgba(255,24,40,0.85)] transition-all cursor-pointer active:scale-98 group"
-                    >
-                      <div className="flex items-center gap-3">
-                        <Plus size={19} className="text-white group-hover:rotate-90 transition-transform" />
-                        <span className="text-white tracking-wide">New Chat</span>
+                      {/* Theme Toggle in Drawer Header */}
+                      <ThemeToggle showLabel={false} />
+                    </div>
+                  </div>
+
+                  {!currentUser || currentUser.isAnonymous ? (
+                    /* GUEST SIDEBAR / MENU: Sign In Required Box */
+                    <div className="flex-1 min-h-0 flex flex-col items-center justify-center p-4 text-center my-auto">
+                      <div className="w-14 h-14 rounded-2xl bg-[#120205] border border-[#00a6ff]/50 flex items-center justify-center text-[#00a6ff] shadow-[0_0_20px_rgba(0, 166, 255,0.35)] mb-3">
+                        <Lock size={24} />
                       </div>
-                      <ChevronRight size={18} className="text-[#ff1828] font-bold group-hover:translate-x-0.5 transition-transform" />
-                    </button>
-
-                    {/* Navigation List Items: Chat, Explore GPTs, Library */}
-                    <div className="space-y-1.5 pt-0.5 text-[15px] font-normal text-white">
+                      <h3 className="text-white text-base font-bold tracking-tight mb-1.5" style={{ fontFamily: "'Syne', sans-serif" }}>
+                        Sign in required
+                      </h3>
+                      <p className="text-xs text-zinc-400 leading-relaxed max-w-[210px] mb-5">
+                        Sign in to access your chats, projects and memory.
+                      </p>
                       <button
                         type="button"
-                        onClick={() => setIsDrawerOpen(false)}
-                        className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-white transition-all cursor-pointer"
+                        onClick={() => {
+                          setIsDrawerOpen(false);
+                          onOpenLogin?.();
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-[#00a6ff] hover:bg-[#0094e6] text-white text-xs font-bold transition-all shadow-[0_0_15px_rgba(0, 166, 255,0.5)] cursor-pointer active:scale-95"
                       >
-                        <MessageSquare size={19} strokeWidth={1.8} className="text-white" />
-                        <span className="tracking-wide">Chat</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsDrawerOpen(false)}
-                        className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
-                      >
-                        <LayoutGrid size={19} strokeWidth={1.8} className="text-zinc-400" />
-                        <span className="tracking-wide">Explore GPTs</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsDrawerOpen(false)}
-                        className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
-                      >
-                        <Folder size={19} strokeWidth={1.8} className="text-zinc-400" />
-                        <span className="tracking-wide">Library</span>
+                        Sign In
                       </button>
                     </div>
-                  </div>
-
-                  {/* ONLY RECENT SECTION SCROLLABLE: Clean list without glowing highlight div */}
-                  <div className="flex-1 min-h-0 flex flex-col pt-3 relative z-10">
-                    <span className="text-[13px] font-normal text-zinc-500 px-3 tracking-wide mb-2 shrink-0">
-                      Recent
-                    </span>
-
-                    {/* Scrollable list of recent items */}
-                    <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
-                      {[
-                        'Landing Page Design',
-                        'Website Layout Ideas',
-                        'UI/UX Best Practices',
-                        'Tailwind CSS Guide',
-                        'Product Marketing Plan',
-                      ].map((item) => (
+                  ) : (
+                    <>
+                      {/* Authenticated Mode: New Chat + Navigation */}
+                      <div className="shrink-0 space-y-4 relative z-10">
+                        {/* + New Chat Pill Button */}
                         <button
-                          key={item}
                           type="button"
-                          onClick={() => handleSelectRecent(item)}
-                          className="w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] text-zinc-200 hover:text-white border border-transparent group"
+                          onClick={handleNewChat}
+                          className="w-full py-3 px-4 rounded-[20px] bg-[#0c0204] border-[1.5px] border-[#00a6ff] text-white font-medium text-[15px] flex items-center justify-between shadow-[0_0_18px_rgba(0, 166, 255,0.6)] hover:shadow-[0_0_26px_rgba(0, 166, 255,0.85)] transition-all cursor-pointer active:scale-98 group"
                         >
-                          <div className="flex items-center gap-3 truncate">
-                            <MessageSquare size={17} strokeWidth={1.8} className="text-zinc-400 group-hover:text-white shrink-0" />
-                            <span className="truncate text-[14px] text-white font-normal">{item}</span>
+                          <div className="flex items-center gap-3">
+                            <Plus size={19} className="text-white group-hover:rotate-90 transition-transform" />
+                            <span className="text-white tracking-wide">New Chat</span>
                           </div>
+                          <ChevronRight size={18} className="text-[#00a6ff] font-bold group-hover:translate-x-0.5 transition-transform" />
                         </button>
-                      ))}
-                    </div>
-                  </div>
+
+                        {/* Navigation List Items: Chat, Explore GPTs, Library */}
+                        <div className="space-y-1.5 pt-0.5 text-[15px] font-normal text-white">
+                          <button
+                            type="button"
+                            onClick={() => setIsDrawerOpen(false)}
+                            className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-white transition-all cursor-pointer"
+                          >
+                            <MessageSquare size={19} strokeWidth={1.8} className="text-white" />
+                            <span className="tracking-wide">Chat</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsDrawerOpen(false)}
+                            className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
+                          >
+                            <LayoutGrid size={19} strokeWidth={1.8} className="text-zinc-400" />
+                            <span className="tracking-wide">Explore GPTs</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsDrawerOpen(false)}
+                            className="w-full px-3 py-2 rounded-xl hover:bg-white/[0.06] text-left flex items-center gap-3.5 text-zinc-300 hover:text-white transition-all cursor-pointer"
+                          >
+                            <Folder size={19} strokeWidth={1.8} className="text-zinc-400" />
+                            <span className="tracking-wide">Library</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* ONLY RECENT SECTION SCROLLABLE: User's real Firestore chats */}
+                      <div className="flex-1 min-h-0 flex flex-col pt-3 relative z-10">
+                        <span className="text-[13px] font-normal text-zinc-500 px-3 tracking-wide mb-2 shrink-0">
+                          Recent
+                        </span>
+
+                        {/* Scrollable list of user's saved chats */}
+                        <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 no-scrollbar">
+                          {Object.keys(userChatThreads).length === 0 ? (
+                            <div className="px-3 py-6 text-center text-xs text-zinc-500">
+                              No saved chats yet. Start a new conversation!
+                            </div>
+                          ) : (
+                            Object.values(userChatThreads).map((thread: any) => (
+                              <div
+                                key={thread.id || thread.title}
+                                className="w-full px-3 py-2.5 rounded-xl flex items-center justify-between transition-all cursor-pointer hover:bg-white/[0.06] text-zinc-200 hover:text-white border border-transparent group"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectRecent(thread.title || thread.id)}
+                                  className="flex items-center gap-3 truncate text-left flex-1 min-w-0"
+                                >
+                                  <MessageSquare size={17} strokeWidth={1.8} className="text-zinc-400 group-hover:text-white shrink-0" />
+                                  <span className="truncate text-[14px] text-white font-normal">{thread.title || thread.id}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (currentUser?.uid && thread.id) {
+                                      await deleteChatThreadFromFirestore(thread.id, currentUser.uid);
+                                    }
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-zinc-500 hover:text-red-400 transition-opacity ml-1 shrink-0"
+                                  title="Delete chat"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   {/* BOTTOM ACTIONS: Back to Dashboard & User Profile Row (Fixed) */}
                   <div className="shrink-0 space-y-3 pt-3 relative z-10">
-                    {/* Glowing Red Button: ← Back to Dashboard */}
+                    {/* Theme-aware Button: ← Back to Dashboard */}
                     <button
                       type="button"
                       onClick={onClose}
-                      className="w-full py-2.5 px-4 rounded-[18px] bg-[#120205] border-[1.5px] border-[#ff1828] hover:border-red-400 text-white font-semibold text-[14px] flex items-center justify-center gap-2.5 shadow-[0_0_20px_rgba(255,24,40,0.7)] hover:shadow-[0_0_28px_rgba(255,24,40,0.9)] transition-all cursor-pointer active:scale-98"
+                      className="w-full py-2.5 px-4 rounded-[18px] text-white font-semibold text-[14px] flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-98 theme-button-primary"
                     >
                       <ArrowLeft size={17} className="text-white" />
                       <span>Back to Dashboard</span>
@@ -1028,11 +1164,11 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                     {currentUser && !currentUser.isAnonymous ? (
                       <div className="flex items-center justify-between px-2.5 py-2 select-none rounded-xl bg-white/[0.04] border border-white/10">
                         <div className="flex items-center gap-2.5 min-w-0 truncate">
-                          <div className="w-9 h-9 rounded-full bg-[#120205] border-[1.5px] border-[#ff1828] flex items-center justify-center text-[#ff1828] shadow-[0_0_12px_rgba(255,24,40,0.6)] shrink-0 overflow-hidden">
+                          <div className="w-9 h-9 rounded-full bg-[#120205] border-[1.5px] border-[#00a6ff] flex items-center justify-center text-[#00a6ff] shadow-[0_0_12px_rgba(0, 166, 255,0.6)] shrink-0 overflow-hidden">
                             {currentUser?.photoURL ? (
                               <img src={currentUser.photoURL} alt="Profile" className="w-full h-full object-cover" />
                             ) : (
-                              <UserIcon size={17} className="fill-[#ff1828] text-[#ff1828]" />
+                              <UserIcon size={17} className="fill-[#00a6ff] text-[#00a6ff]" />
                             )}
                           </div>
                           <div className="flex flex-col truncate">
@@ -1086,7 +1222,7 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
                             e.stopPropagation();
                             onOpenLogin?.();
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-[#ff1828] hover:bg-[#e01423] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(255,24,40,0.4)] cursor-pointer shrink-0"
+                          className="px-3 py-1.5 rounded-lg bg-[#00a6ff] hover:bg-[#0094e6] text-white text-xs font-bold transition-all shadow-[0_0_12px_rgba(0, 166, 255,0.4)] cursor-pointer shrink-0"
                         >
                           Sign In
                         </button>
@@ -1099,13 +1235,17 @@ export const InteractiveRevealModal: React.FC<InteractiveRevealModalProps> = ({
           )}
         </AnimatePresence>
 
-        {/* FULL SCREEN CHAT VIEW (Matches file_00000000b5f482119eb4dbb89d8067b4.png) */}
+        {/* FULL SCREEN CHAT VIEW */}
         <FullScreenChatView
           isOpen={isFullScreenChatOpen}
-          onClose={() => setIsFullScreenChatOpen(false)}
+          onClose={() => {
+            setIsFullScreenChatOpen(false);
+            setCurrentFullScreenPrompt('');
+          }}
           initialPrompt={currentFullScreenPrompt}
+          onClearInitialPrompt={() => setCurrentFullScreenPrompt('')}
           initialAttachments={currentFullScreenAttachments}
-          selectedRecentTopic={activeRecentItem}
+          selectedRecentTopic={currentUser && !currentUser.isAnonymous ? activeRecentItem : 'Guest Session'}
           onSelectRecentTopic={(topic) => setActiveRecentItem(topic)}
           onOpenLogin={onOpenLogin}
         />

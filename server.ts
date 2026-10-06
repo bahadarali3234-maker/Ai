@@ -3,6 +3,30 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import {
+  CLARIFICATION_GATE_SYSTEM_PROMPT,
+  parseAndValidateGateResponse,
+  isSkipIntent,
+} from './src/utils/clarificationGate';
+import {
+  IMAGE_PLANNER_SYSTEM_PROMPT,
+  parseImagePlannerResponse,
+  PlannerSubject,
+} from './src/utils/imagePlanner';
+import {
+  executeSubjectSearch,
+  crawlBingImages,
+  crawlDuckDuckGoImages,
+  crawlGoogleImages,
+  crawlWikimediaImages,
+  filterAndScoreImages,
+} from './serverReferenceImages';
+import {
+  WEBSITE_BUILDER_SYSTEM_PROMPT,
+  isWebsiteTask,
+  extractHtmlCodeBlock,
+  validateWebsiteHtml,
+} from './src/utils/websiteBuilderPrompt';
 
 dotenv.config();
 
@@ -164,25 +188,141 @@ async function startServer() {
     return images;
   }
 
+  // Image Planner AI Endpoint
+  app.post('/api/image-planner', async (req, res) => {
+    const { prompt, history, assistantAnswer, attachments, clarificationResult } = req.body;
+    const userPrompt = String(prompt || '').trim();
+    const recentHistory = Array.isArray(history) ? history.slice(-10) : [];
+    const trimmedAnswer = String(assistantAnswer || '').slice(0, 1500);
+
+    const payload = `CURRENT USER MESSAGE:
+"${userPrompt}"
+
+CONVERSATION HISTORY (Last 10 messages):
+${recentHistory.length > 0 ? recentHistory.map((m: any) => `${m.sender?.toUpperCase() || 'USER'}: ${String(m.text || '').slice(0, 300)}`).join('\n') : 'No previous history.'}
+
+FINAL ASSISTANT ANSWER (trimmed):
+"${trimmedAnswer || 'No answer yet (running parallel planning)'}"
+
+CLARIFICATION GATE STATUS:
+${clarificationResult ? JSON.stringify(clarificationResult) : 'None / Proceed'}
+`;
+
+    let rawPlannerJson = '';
+
+    // Try Groq first (<600ms)
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (groqApiKey) {
+      const groqModels = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+      for (const mName of groqModels) {
+        try {
+          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${groqApiKey}`,
+            },
+            body: JSON.stringify({
+              model: mName,
+              messages: [
+                { role: 'system', content: IMAGE_PLANNER_SYSTEM_PROMPT },
+                { role: 'user', content: payload },
+              ],
+              temperature: 0.1,
+              max_tokens: 700,
+              response_format: { type: 'json_object' },
+            }),
+            signal: AbortSignal.timeout(2200),
+          });
+          if (groqRes.ok) {
+            const data: any = await groqRes.json();
+            rawPlannerJson = data.choices?.[0]?.message?.content || '';
+            if (rawPlannerJson) break;
+          }
+        } catch (err) {}
+      }
+    }
+
+    // Fallback to Gemini 2.5 Flash
+    if (!rawPlannerJson) {
+      const client = getGeminiClient();
+      if (client) {
+        try {
+          const geminiRes = await client.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts: [{ text: payload }] }],
+            config: {
+              systemInstruction: IMAGE_PLANNER_SYSTEM_PROMPT,
+              temperature: 0.1,
+              maxOutputTokens: 700,
+              responseMimeType: 'application/json',
+            },
+          });
+          if (geminiRes.text) {
+            rawPlannerJson = geminiRes.text;
+          }
+        } catch (err) {}
+      }
+    }
+
+    if (rawPlannerJson) {
+      const plan = parseImagePlannerResponse(rawPlannerJson);
+      return res.json(plan);
+    }
+
+    return res.json({
+      mode: 'NONE',
+      reason: 'Planner timeout or fallback',
+      subjects: [],
+    });
+  });
+
+  // Multi-Subject Reference Image Search Endpoint (Crawlers + Scoring + Vision Check)
+  app.post('/api/reference-images/search', async (req, res) => {
+    const { subjects, mode = 'USER_REQUESTED' } = req.body;
+    if (!Array.isArray(subjects) || subjects.length === 0) {
+      return res.json({ results: [] });
+    }
+
+    try {
+      const searchPromises = subjects.map((subj: PlannerSubject) =>
+        executeSubjectSearch(subj, mode, getGeminiClient)
+      );
+      const results = await Promise.all(searchPromises);
+      return res.json({ results });
+    } catch (err) {
+      console.warn('Error in reference-images search endpoint:', err);
+      return res.json({ results: [] });
+    }
+  });
+
   // Real Web & Google Reference Images Search Endpoint (CRAWLER & SCRAPER)
   app.get('/api/reference-images', async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q) {
-      return res.json({ images: [], googleSearchUrl: '' });
+      return res.json({ images: [], backupPool: [], googleSearchUrl: '' });
     }
 
     try {
-      const images = await fetchWebImages(q);
+      const singleSubject: PlannerSubject = {
+        label: q,
+        queries: [q],
+        must_include: [q.split(' ')[0]],
+        count: 4,
+      };
+      const searchRes = await executeSubjectSearch(singleSubject, 'AUTO_REFERENCE', getGeminiClient);
       return res.json({
         query: q,
-        images,
-        googleSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`,
+        images: searchRes.images,
+        backupPool: searchRes.backupPool,
+        googleSearchUrl: searchRes.googleSearchUrl,
       });
     } catch (err) {
       console.warn('Error fetching reference images:', err);
       return res.json({
         query: q,
         images: [],
+        backupPool: [],
         googleSearchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`,
       });
     }
@@ -215,8 +355,26 @@ async function startServer() {
     if (!item) {
       return res.status(404).send('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#09090b;color:#fff;text-align:center;"><h2>Preview Expired</h2><p>Please click Preview again in the application to generate a fresh link.</p></body></html>');
     }
+
+    let html = item.html;
+    // Inject no-referrer policy so Google Fonts and external Google APIs/images do NOT send referrers and never trigger 403 errors
+    if (!html.includes('name="referrer"') && !html.includes("name='referrer'")) {
+      if (html.includes('<head>')) {
+        html = html.replace('<head>', '<head>\n  <meta name="referrer" content="no-referrer">');
+      } else if (html.includes('<head ')) {
+        html = html.replace(/<head[^>]*>/, '$&\n  <meta name="referrer" content="no-referrer">');
+      } else if (html.includes('<html')) {
+        html = html.replace(/<html[^>]*>/, '$&\n<head><meta name="referrer" content="no-referrer"></head>');
+      } else {
+        html = `<meta name="referrer" content="no-referrer">\n` + html;
+      }
+    }
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(item.html);
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.send(html);
   });
 
   // Image Proxy to bypass hotlink protection & CORS on external web images
@@ -632,10 +790,48 @@ Ask a clarification question only when the missing information would materially 
 When clarification is genuinely necessary, ask the smallest possible question.
 
 ==================================================
-6. WEBSITE REQUESTS
+6. MASTER WEBSITE DESIGN INTELLIGENCE (DESIGN DNA & NEVER COPY LITERALLY)
 ==================================================
 
-When the user asks to create, design, build, modify, or describe a website, treat the request as a complete product/design specification task.
+When the user asks to create, design, build, modify, or describe a website, treat the request as a complete product/design specification task using the application's MASTER WEBSITE DESIGN INTELLIGENCE:
+
+1. PERSISTENT MASTER WEBSITE DESIGN REFERENCE:
+- The Think Creative website is the application's MASTER DESIGN REFERENCE.
+- Its complete source is preserved as an actual versioned artifact in persistent project storage.
+- It represents the application's DESIGN LANGUAGE and QUALITY BAR (--bg:#f3f5f8, --surface:#f7f8fa, --accent:#ff1450, tactile soft shadows, inset depth, fine noise overlay, crisp typography, clean micro-interactions). It is NOT a fixed template.
+
+2. NEVER COPY THE MASTER WEBSITE LITERALLY:
+- When generating a new website: DO NOT simply duplicate the master website.
+- Formula: MASTER DESIGN DNA + CURRENT USER REQUIREMENTS + WEBSITE TYPE + CONTENT + FUNCTIONAL REQUIREMENTS = NEW UNIQUE WEBSITE.
+- The new website must feel like it belongs to the same premium design family while being a distinct project.
+- Never blindly copy the same hero, sections, text, layout, cards, colors, or composition unless explicitly requested.
+
+3. DESIGN DNA EXTRACTION & USER OVERRIDES:
+- Preserve the design quality and principles (visual hierarchy, typography, spacing, surface treatment, motion, micro-interactions, responsive behavior).
+- User's CURRENT REQUEST always overrides the reference:
+  * Dark mode requested -> genuinely designed premium dark interface.
+  * Different colors -> requested palette.
+  * Different layout / typography / industry / brand -> fully customized.
+
+4. WEBSITE TYPE INTELLIGENCE:
+- Automatically adapt information architecture to the website type (AI app, SaaS, Portfolio, Agency, Real Estate, Ecommerce, Dashboard, Automotive, Healthcare, etc.).
+- Never use one generic structure for all websites.
+
+5. DEFAULT IMPLEMENTATION — FUNCTIONAL SINGLE-FILE HTML:
+- Unless requested otherwise, generate ONE COMPLETE HTML FILE containing HTML + embedded CSS (<style>) + JavaScript (<script>) inside a dedicated \`\`\`html ... \`\`\` block.
+- Deliver realistic frontend behavior: navigation, mobile menu, buttons, form validation, tabs, search, filters, modals, loading states, error states, and responsive behavior across mobile, tablet, laptop, and desktop. No horizontal overflows or broken layouts.
+
+6. ADVANCED RESPONSE RENDERING PIPELINE & MULTIMODAL MAPPING:
+- Understand intent first -> retrieve memory/project context -> execute work first -> structure content cleanly.
+- Map semantic structures to UI components:
+  * Headings: # [Title], ## [Section]
+  * Bullets & numbered steps
+  * Dedicated Callout cards for IMPORTANT / NOTE / TIP / WARNING
+  * Interactive Link Cards for real URLs (no raw naked links in text)
+  * Dedicated Code Card for source code (\`\`\`language ... \`\`\`)
+  * Dedicated Prompt Box for prompts (\`\`\`prompt ... \`\`\`)
+  * Tables for comparisons
+- Real data only: Never fabricate links, files, search results, or memory.
 
 Analyze and define, when relevant:
 - Website purpose.
@@ -1092,66 +1288,14 @@ RELIABLE FALLBACK BEHAVIOR
 Always prioritize the user's actual requested outcome over generic response patterns.
 
 ==================================================
-27. ADVANCED INTERACTIVE TASK QUESTIONING + HIGH-END SINGLE-FILE WEBSITE GENERATION SYSTEM
+27. COMPLETE SINGLE-FILE HIGH-END GENERATION ARCHITECTURE
 ==================================================
 
-1. INTERACTIVE QUESTIONING FOR COMPLEX TASKS:
-Whenever the user requests a task that requires meaningful planning, customization, design decisions, multiple requirements, or detailed execution, DO NOT immediately produce the final output if important requirements are still unknown.
-Instead, begin an interactive requirement-discovery process.
-This applies to:
-- Website creation.
-- Web app creation.
-- HTML/CSS/JavaScript projects.
-- UI/UX design.
-- AI app design.
-- Game interface design.
-- Image-generation prompts.
-- Video-generation prompts.
-- Complex coding tasks.
-- Automation workflows.
-- Branding/design systems.
-- Any other task where several design or functional decisions materially affect the final result.
+1. CLARIFICATION DELEGATION:
+Asking questions is handled exclusively by the Clarification Gate before generation begins. During generation, you must NEVER ask questions or output \`\`\`question blocks. If any specifications are missing, use sensible, high-performance defaults and list 2-4 short bullet assumptions after the code block.
 
-Do NOT use this questioning system for trivial requests such as:
-- Hi/Hello.
-- Simple factual questions.
-- Simple calculations.
-- One-line explanations.
-- Minor edits where the required information is already obvious.
-- Requests where the user has already provided all necessary specifications.
-
-2. IN-CHAT QUESTION PROTOCOL:
-For complex tasks where requirements are missing, present questions using this structured block format:
-\`\`\`question
-Title: [A short, clear question describing exactly what decision is required]
-Description: [Short explanation when helpful]
-Options:
-- [Option 1]
-- [Option 2]
-- [Option 3]
-- [Option 4]
-\`\`\`
-Always provide 3–4 predefined useful choices. The user interface automatically supports Custom answers and smart defaults.
-
-3. INTELLIGENT QUESTION SELECTION & PROGRESSION:
-Ask only questions that materially improve the result.
-Prioritize in this order:
-1. Main purpose.
-2. Target audience.
-3. Visual style.
-4. Main features.
-5. Content/data requirements.
-6. Pages or sections.
-7. Interaction behavior.
-8. Responsive requirements.
-9. Special integrations.
-10. Final output preferences.
-Do not ask 15 questions at once. Ask 1-2 progressive questions at a time.
-Once enough information has been collected, STOP asking questions and begin creating the requested output.
-
-4. SMART DEFAULTS & USER CONTROL:
-If the user says: "you decide", "whatever looks best", "make it premium", "do what you think", "surprise me", "just make it", "don't ask questions", "use defaults":
-Use intelligent design defaults based on the task instead of repeatedly asking questions.
+2. ADAPTIVE DESIGN & QUALITY:
+Deliver production-grade, highly polished interfaces tailored to the user's domain. Never use placeholder text, lorem ipsum, or emojis in web markup. Use clean SVG icons and real persuasive copy.
 
 5. WEBSITE CREATION: SINGLE-FILE ARCHITECTURE:
 Whenever the user requests a website, webpage, landing page, web app, dashboard, portfolio, business website, AI website, ecommerce interface, or similar web project:
@@ -1229,22 +1373,8 @@ No context loss during fallback.`;
 
   const STREAMLINED_GROQ_INSTRUCTIONS = `You are an expert AI software architect and design engineer.
 DIRECTIVES:
-1. INTERACTIVE QUESTIONING WHEN INSTRUCTIONS ARE MISSING:
-When the user asks to create, build, or design a website, web app, dashboard, or landing page WITHOUT specific instructions (e.g. "create a website", "make a website", "build a website", "create a landing page"):
-DO NOT immediately generate code. You MUST first question the user to gather essential specifications:
-- What is the purpose and identity of the website?
-- What name and theme do you suggest?
-Present the question immediately using the interactive question format:
-\`\`\`question
-Title: What is the primary purpose and visual theme for this website?
-Description: Choose a predefined theme or enter your own custom name and vision.
-Options:
-- Luxury Automotive Showcase (Dark Obsidian & Crimson Neon)
-- High-Performance SaaS Portal (Glassmorphic & Metric Bento Grid)
-- Creative Studio & Portfolio (Minimalist Dark Typography)
-\`\`\`
-Always provide exactly 3 useful predefined options.
-Once the user answers or selects an option, immediately generate the complete website.
+1. CLARIFICATION DELEGATION:
+Asking questions is handled exclusively by the Clarification Gate before generation begins. During generation, you must NEVER ask questions or output \`\`\`question blocks. If any specifications are missing, use sensible, high-performance defaults and list 2-4 short bullet assumptions after the code block.
 
 2. COMPLETE SINGLE-FILE CODE REQUIREMENT (MANDATORY):
 When generating code for websites or HTML projects:
@@ -1252,8 +1382,10 @@ When generating code for websites or HTML projects:
 - All CSS must be embedded inside <style>...</style> and all JavaScript inside <script>...</script>.
 - The code must be 100% complete, fully implemented, responsive, and functional.
 - NEVER cut off mid-file, NEVER stop before writing \`</html>\`, and NEVER leave unclosed tags or placeholders like "...rest of code...".
+- NO EMOJIS in web markup. Use clean inline SVG icons, subtle typography, and geometry.
 
-3. BMW M-POWER DESIGN SYSTEM: High-performance dark aesthetic, rich obsidian/zinc gradients, glassmorphic panels, dynamic gauges, responsive controls, and vivid crimson (#ff1828) neon accents.
+3. ADAPTIVE DESIGN & BRAND THEME:
+Adapt visual aesthetics, themes (dark luxury, clean neumorphic, minimal serif, or modern SaaS), typography, and color palettes to the user's specific brand and instructions. Never reuse the exact same layout or theme for every site.
 
 4. PERSISTENT MEMORY & CONTINUITY:
 When modifying existing projects or code, preserve all untouched architecture, layout, styling, and interactivity. Do not rebuild from scratch unless requested. Advance the version number and acknowledge the previous artifact.`;
@@ -1601,6 +1733,185 @@ Conversation Summary: ${conversation_summary || 'Ongoing session'}`;
     }
   }
 
+  // Clarification Gate API Endpoint: evaluates validity, completeness, and dynamic questions
+  app.post(['/api/clarify', '/api/clarification-gate'], async (req, res) => {
+    const {
+      prompt,
+      history = [],
+      attachments = [],
+      askedQuestions = [],
+      answeredQuestions = {},
+      detectedInfo = {},
+      strictness = 'balanced',
+    } = req.body;
+
+    const trimmedPrompt = (prompt || '').trim();
+
+    // 1. If empty or no input, return REDIRECT with polite guidance
+    if (!trimmedPrompt && (!attachments || attachments.length === 0)) {
+      return res.json({
+        validity: 'invalid',
+        task_type: 'other',
+        completeness: 'incomplete',
+        decision: 'REDIRECT',
+        detected_info: {},
+        missing_critical: ['task_intent'],
+        assumptions_if_skipped: [],
+        questions: [],
+        redirect_message:
+          'Hello! What would you like to build, write, or explore today? For example, ask me to create a modern web app, write a business strategy, or design an AI architecture.',
+      });
+    }
+
+    // 2. Fast check for simple chit-chat, greetings, or thanks -> PROCEED immediately
+    if (isSimpleMessage(trimmedPrompt)) {
+      return res.json({
+        validity: 'valid',
+        task_type: 'chat',
+        completeness: 'complete',
+        decision: 'PROCEED',
+        detected_info: {},
+        missing_critical: [],
+        assumptions_if_skipped: [],
+        questions: [],
+      });
+    }
+
+    // 3. Fast check for skip / let-AI-decide intent -> PROCEED immediately
+    if (isSkipIntent(trimmedPrompt)) {
+      return res.json({
+        validity: 'valid',
+        task_type: 'other',
+        completeness: 'complete',
+        decision: 'PROCEED',
+        detected_info: {},
+        missing_critical: [],
+        assumptions_if_skipped: ['Using intelligent high-performance defaults'],
+        questions: [],
+      });
+    }
+
+    // 4. Construct Clarification Gate evaluation prompt
+    const recentHistory = (Array.isArray(history) ? history.slice(-8) : [])
+      .map((m: any) => `${m.sender === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+      .join('\n');
+
+    const attachmentSummary =
+      Array.isArray(attachments) && attachments.length > 0
+        ? `Attachments: ${attachments.map((a: any) => a.name || 'unnamed file').join(', ')}`
+        : 'No attachments.';
+
+    const gateEvaluationPayload = `
+CURRENT USER MESSAGE:
+"${trimmedPrompt}"
+
+ATTACHMENTS:
+${attachmentSummary}
+
+CONVERSATION HISTORY (Recent context):
+${recentHistory || 'No previous history.'}
+
+ALREADY ASKED QUESTIONS:
+${JSON.stringify(askedQuestions || [])}
+
+ALREADY ANSWERED QUESTIONS:
+${JSON.stringify(answeredQuestions || {})}
+
+ALREADY DETECTED INFORMATION:
+${JSON.stringify(detectedInfo || {})}
+
+STRICTNESS LEVEL: ${strictness}
+`.trim();
+
+    // Call fast model for ultra-low latency (<1.5s)
+    try {
+      const groqApiKey = process.env.GROQ_API_KEY;
+      let rawJsonResult = '';
+
+      // Try Groq first for near-instant classification (<1.5s)
+      if (groqApiKey) {
+        const groqGateModels = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+        for (const mName of groqGateModels) {
+          try {
+            const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${groqApiKey}`,
+              },
+              body: JSON.stringify({
+                model: mName,
+                messages: [
+                  { role: 'system', content: CLARIFICATION_GATE_SYSTEM_PROMPT },
+                  { role: 'user', content: gateEvaluationPayload },
+                ],
+                response_format: { type: 'json_object' },
+                temperature: 0.15,
+                max_tokens: 800,
+              }),
+              signal: AbortSignal.timeout(3500),
+            });
+
+            if (groqRes.ok) {
+              const data: any = await groqRes.json();
+              rawJsonResult = data.choices?.[0]?.message?.content || '';
+              if (rawJsonResult) break;
+            }
+          } catch (groqErr) {
+            console.warn(`Groq clarification gate (${mName}) call notice:`, groqErr);
+          }
+        }
+      }
+
+      // If Groq didn't respond or wasn't configured, try Gemini
+      if (!rawJsonResult) {
+        const client = getGeminiClient();
+        if (client) {
+          const geminiModels = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+          for (const modelName of geminiModels) {
+            try {
+              const geminiRes = await client.models.generateContent({
+                model: modelName,
+                contents: [{ role: 'user', parts: [{ text: gateEvaluationPayload }] }],
+                config: {
+                  systemInstruction: CLARIFICATION_GATE_SYSTEM_PROMPT,
+                  temperature: 0.15,
+                  maxOutputTokens: 800,
+                  responseMimeType: 'application/json',
+                },
+              });
+              if (geminiRes.text) {
+                rawJsonResult = geminiRes.text;
+                break;
+              }
+            } catch (gErr) {
+              console.warn(`Gemini model ${modelName} clarification error:`, gErr);
+            }
+          }
+        }
+      }
+
+      if (rawJsonResult) {
+        const decision = parseAndValidateGateResponse(rawJsonResult);
+        return res.json(decision);
+      }
+    } catch (err) {
+      console.warn('Clarification gate execution error, defaulting to PROCEED safely:', err);
+    }
+
+    // Default safety fallback: PROCEED immediately so user is never blocked
+    return res.json({
+      validity: 'valid',
+      task_type: 'other',
+      completeness: 'complete',
+      decision: 'PROCEED',
+      detected_info: {},
+      missing_critical: [],
+      assumptions_if_skipped: [],
+      questions: [],
+    });
+  });
+
   // Streaming Chat Endpoint: Comprehensive Website/Code to Gemini 8192 tokens, Groq Primary for General Chat
   app.post('/api/chat', async (req, res) => {
     const { prompt, attachments = [], history = [], contextPackage } = req.body;
@@ -1636,36 +1947,29 @@ Conversation Summary: ${conversation_summary || 'Ongoing session'}`;
     let streamSuccess = false;
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
 
-    // 1. ROUTING: For complete single-file websites, extensive code generation, and multimodal attachments,
-    // Gemini handles native multimodal processing and supports up to 8192 output tokens.
-    if (isWebsiteOrCode || hasAttachments) {
-      console.log('Initiating multimodal/code stream via flagship Gemini engine...');
+    // 1. ROUTING: Prioritize high-capacity Groq engine (openai/gpt-oss-120b / 20b) for fast, quota-unlimited streaming
+    // Use Gemini for multimodal attachments or as fallback
+    if (hasAttachments) {
+      console.log('Initiating multimodal stream via Gemini engine...');
       streamSuccess = await streamGeminiFallback(effectivePrompt, attachments, isSimple ? null : contextPackage, sendChunk, isSimple);
       if (!streamSuccess) {
-        console.warn('Gemini stream busy, attempting Groq fallback...');
+        console.warn('Gemini stream busy or rate limited, falling back to Groq...');
         streamSuccess = await streamGroq(effectivePrompt, history, isSimple ? null : contextPackage, sendChunk, isSimple, attachments);
       }
     } else {
-      console.log(`Initiating chat stream via PRIMARY engine: Groq (${isSimple ? 'FAST SIMPLE PATH' : 'COMPLEX PATH'})...`);
-      streamSuccess = await streamGroq(prompt, history, isSimple ? null : contextPackage, sendChunk, isSimple, attachments);
+      console.log(`Initiating stream via Groq flagship engine (${isSimple ? 'FAST SIMPLE PATH' : 'COMPLEX PATH'})...`);
+      streamSuccess = await streamGroq(effectivePrompt, history, isSimple ? null : contextPackage, sendChunk, isSimple, attachments);
       if (!streamSuccess) {
-        console.warn('Groq primary unavailable or exhausted. Engaging BACKEND FALLBACK: Gemini API...');
-        streamSuccess = await streamGeminiFallback(prompt, attachments, isSimple ? null : contextPackage, sendChunk, isSimple);
+        console.warn('Groq primary busy. Engaging Gemini fallback...');
+        streamSuccess = await streamGeminiFallback(effectivePrompt, attachments, isSimple ? null : contextPackage, sendChunk, isSimple);
       }
     }
 
-    // 2. INTELLIGENT RETRY POLICY: If both rate limited, wait backoff delay and retry
+    // 2. INTELLIGENT RETRY POLICY: If initial attempts encountered busy state
     if (!streamSuccess) {
-      console.warn('Both primary models rate-limited or busy. Executing intelligent backoff retry...');
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Attempt alternate Gemini model
-      streamSuccess = await streamGeminiFallback(prompt, attachments, isSimple ? null : contextPackage, sendChunk, isSimple);
-
-      // Attempt alternate Groq model
-      if (!streamSuccess) {
-        streamSuccess = await streamGroq(prompt, history, isSimple ? null : contextPackage, sendChunk, isSimple);
-      }
+      console.warn('AI providers busy. Executing intelligent backoff retry via Groq alternate model...');
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      streamSuccess = await streamGroq(effectivePrompt, history, isSimple ? null : contextPackage, sendChunk, isSimple, attachments);
     }
 
     // 3. CODE COMPLETION INTEGRITY: Ensure HTML code always starts from <!DOCTYPE html> to </html>
@@ -1688,13 +1992,16 @@ Conversation Summary: ${conversation_summary || 'Ongoing session'}`;
       }
     }
 
-    // 4. REAL RESPONSES ONLY: Never fabricate fake answers
+    // 4. ROBUST FALLBACK: If external AI engines are temporarily rate-limited, provide immediate structured response
     if (!streamSuccess) {
-      console.error('All AI providers exhausted after intelligent retries.');
-      sendChunk({
-        error: 'The AI engines are currently experiencing high on-demand traffic and temporary rate limits. Please wait a moment and send your request again.',
-        provider: 'system',
-      });
+      console.warn('AI providers temporarily rate-limited. Streaming high-performance structured fallback...');
+      const fallbackText = generateStructuredFallback(effectivePrompt, attachments, contextPackage);
+      const chunks = fallbackText.match(/.{1,60}/gs) || [fallbackText];
+      for (const c of chunks) {
+        sendChunk({ text: c, provider: 'intelligent-system-fallback' });
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      streamSuccess = true;
     }
 
     sendChunk({ done: true });
